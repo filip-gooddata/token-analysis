@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token usage drill-down</title>
+<style>
+html, body { margin: 0; padding: 0; }
+body { padding: 24px 32px; }
+@media (max-width: 600px) { body { padding: 16px 12px; } }
+.tkd {
+  --fg: var(--foreground, #0b0b0b);
+  --fg2: var(--muted-foreground, #52514e);
+  --wash: var(--muted, #f0efec);
+  --hover: var(--accent, #ebeae6);
+  --line: var(--border, #e1e0d9);
+  --surface: var(--card, #fcfcfb);
+  --rad: var(--radius, 8px);
+  --c1: #2a78d6; --c2: #eb6834; --c3: #1baf7a; --c4: #eda100; --c5: #e87ba4; --c6: #8a63d2;
+  --other: color-mix(in srgb, var(--fg) 30%, transparent);
+  position: relative; color: var(--fg);
+  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  font-size: 14px; line-height: 1.4;
+}
+.tkd * { box-sizing: border-box; }
+@media (prefers-color-scheme: dark) {
+  html { color-scheme: dark; background: var(--background, #141413); }
+  .tkd {
+    --fg: var(--foreground, #ededec);
+    --fg2: var(--muted-foreground, #a3a29e);
+    --wash: var(--muted, #262624);
+    --hover: var(--accent, #30302e);
+    --line: var(--border, #3a3a37);
+    --surface: var(--card, #1c1c1b);
+  }
+}
+.tkd button { font: inherit; color: inherit; }
+.tkd .controls { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; margin-bottom: 12px; }
+.tkd .seg { display: inline-flex; background: var(--wash); border-radius: var(--rad); padding: 2px; }
+.tkd .seg button { border: 0; background: transparent; padding: 4px 10px; border-radius: calc(var(--rad) - 2px); cursor: pointer; font-size: 13px; color: var(--fg2); white-space: nowrap; }
+.tkd .seg button[aria-pressed="true"] { background: var(--surface); color: var(--fg); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+.tkd select { font: inherit; font-size: 13px; color: var(--fg); background: var(--wash); border: 0; border-radius: var(--rad); padding: 5px 8px; cursor: pointer; }
+.tkd .sample { margin-left: auto; font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--fg2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; }
+.tkd .hint { font-size: 12px; color: var(--fg2); margin: 0 0 10px; }
+.tkd .wrap { overflow-x: auto; padding-bottom: 6px; }
+.tkd svg { display: block; overflow: visible; }
+.tkd .seg-r { cursor: default; transition: opacity .15s; }
+.tkd .seg-r.drill { cursor: pointer; }
+.tkd .seg-r:hover { filter: brightness(1.1); }
+.tkd .seg-r:focus-visible { outline: none; stroke: var(--fg); stroke-width: 2; }
+.tkd .sel { stroke: var(--fg); stroke-width: 2; }
+.tkd text { pointer-events: none; }
+.tkd .hd { fill: var(--fg2); font-size: 12px; }
+.tkd .hv { fill: var(--fg); font-size: 15px; font-weight: 600; }
+.tkd .sl { font-size: 11px; font-weight: 600; }
+.tkd .sv { font-size: 11px; opacity: .85; }
+.tkd .ghost { fill: none; stroke: var(--line); stroke-dasharray: 4 4; }
+.tkd .gt { fill: var(--fg2); font-size: 12px; }
+.tkd .li { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; border: 0; background: none; text-align: left; font-size: 13px; min-width: 0; }
+.tkd button.li { cursor: pointer; }
+.tkd button.li:hover { background: var(--hover); }
+.tkd .li .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.tkd .li .lb { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tkd .li .vv { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tkd .li .pp { color: var(--fg2); font-size: 12px; font-variant-numeric: tabular-nums; width: 40px; text-align: right; }
+.tkd .models { border: 1px solid var(--line); border-radius: var(--rad); padding: 8px 10px; margin-bottom: 12px; }
+.tkd .mhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 6px; }
+.tkd .mhead .t { font-size: 12px; font-weight: 600; color: var(--fg2); }
+.tkd .mhead .hint { margin: 0; }
+.tkd .mlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 2px 16px; }
+.tkd .mi { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 6px; font-size: 13px; cursor: pointer; min-width: 0; }
+.tkd .mi:hover { background: var(--hover); }
+.tkd .mi input { margin: 0; flex: none; }
+.tkd .mi .lb { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tkd .mi .vv { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tkd .mi .pp { color: var(--fg2); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tkd .mi.off .lb, .tkd .mi.off .vv { color: var(--fg2); font-weight: 400; }
+.tkd .empty { fill: var(--fg2); font-size: 14px; }
+.tkd .main { display: grid; grid-template-columns: minmax(0, max-content) minmax(300px, 1fr); gap: 16px 28px; align-items: start; }
+.tkd .chartcol { min-width: 0; }
+.tkd .detail { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; border: 1px solid var(--line); border-radius: var(--rad); background: var(--surface); padding: 12px 14px; min-width: 0; }
+@media (max-width: 860px) {
+  .tkd .main { grid-template-columns: minmax(0, 1fr); }
+  .tkd .detail { position: static; max-height: none; }
+}
+.tkd .detail h2 { font-size: 16px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+.tkd .detail .dpath { font-size: 12px; color: var(--fg2); margin: 2px 0 10px; overflow-wrap: anywhere; }
+.tkd .detail .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px 12px; margin-bottom: 14px; }
+.tkd .detail .st .k { font-size: 11px; color: var(--fg2); }
+.tkd .detail .st .x { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tkd .detail h3 { font-size: 12px; font-weight: 600; color: var(--fg2); margin: 12px 0 6px; }
+.tkd .detail .donut { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.tkd .detail .donut .legend { flex: 1 1 170px; display: block; margin: 0; }
+.tkd .detail .donut .li { padding: 2px 4px; }
+.tkd .detail .note { font-size: 12px; color: var(--fg2); margin: 6px 0 0; }
+.tkd .detail .xref { font-size: 13px; margin: -6px 0 12px; padding: 6px 8px; border: 1px solid var(--line); border-radius: calc(var(--rad) - 2px); }
+.tkd .detail .xref button { border: 0; background: transparent; padding: 0; color: var(--fg); text-decoration: underline; cursor: pointer; }
+.tkd .dc { fill: var(--fg); font-size: 13px; font-weight: 600; }
+.tkd .dk { fill: var(--fg2); font-size: 10px; }
+.tkd .hb { fill: var(--c1); }
+.tkd .hb2 { fill: var(--c3); }
+.tkd .hz { fill: var(--wash); }
+.tkd .ax { stroke: var(--line); }
+.tkd .at { fill: var(--fg2); font-size: 10px; }
+.tkd .hit { fill: transparent; }
+.tkd .hit:focus-visible { outline: none; stroke: var(--fg); stroke-width: 1.5; }
+.tkd .tip { position: absolute; pointer-events: none; z-index: 5; display: none; background: var(--surface); border: 1px solid var(--line); border-radius: var(--rad); padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.18); max-width: 240px; }
+.tkd .tip .tv { font-size: 15px; font-weight: 600; }
+.tkd .tip .tl { color: var(--fg2); margin-bottom: 4px; }
+.tkd .tip .tr { display: flex; justify-content: space-between; gap: 12px; color: var(--fg2); font-variant-numeric: tabular-nums; }
+.tkd .tip .tr b { color: var(--fg); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="tkd" id="tkd">
+  <div class="controls">
+    <div class="seg" id="f-range" aria-label="Time range"></div>
+    <select id="f-role" aria-label="Agent role"></select>
+    <span class="sample" id="src-pill"></span>
+  </div>
+  <div class="controls"><div class="seg" id="f-metric" aria-label="Metric"></div></div>
+  <div class="models" id="f-models" role="group" aria-label="Models">
+    <div class="mhead">
+      <span class="t">Models</span>
+      <div class="seg" id="f-mclass" aria-label="Select models"></div>
+      <span class="hint">Claude / GPT select only that class; shift-click adds or removes the class instead.</span>
+    </div>
+    <div class="mlist" id="f-mlist"></div>
+  </div>
+  <p class="hint">Click a segment to see its details. Segments marked › also break down in a new bar; click an open one again to collapse it.</p>
+  <div class="main">
+    <div class="chartcol">
+      <div class="wrap" id="wrap"><svg id="chart" role="img" aria-label="Drill-down stacked bars"></svg></div>
+      <p class="hint" id="coverage" hidden></p>
+    </div>
+    <aside class="detail" id="detail" aria-live="polite" aria-label="Selected segment details"></aside>
+  </div>
+  <div class="tip" id="tip" role="tooltip"></div>
+</div>
+<script>
+const DATA = /*__DATA__*/null;
+const METRICS = [{ id: 'billed', label: 'Billed tokens' }, { id: 'unique', label: 'Unique tokens' }, { id: 'usd', label: '$ at API rates' }];
+const COLORS = [1, 2, 3, 4, 5, 6].map(i => `var(--c${i})`);
+const INK = ['#fff', '#111', '#111', '#111', '#111', '#fff'];
+const ROOT = { id: 'root', label: 'All tokens', children: DATA.tree };
+const ROLE_IDS = DATA.roles.map(r => r.id), MODEL_IDS = DATA.models.map(m => m.id);
+const MODEL_STORE = 'tkd.models';  // excluded model ids, so models that appear later start selected
+const loadModels = () => {
+  let off = [];
+  try { off = JSON.parse(localStorage.getItem(MODEL_STORE) || '[]'); } catch (e) { off = []; }
+  return new Set(MODEL_IDS.filter(id => !(Array.isArray(off) && off.includes(id))));
+};
+const saveModels = () => { try { localStorage.setItem(MODEL_STORE, JSON.stringify(MODEL_IDS.filter(id => !state.models.has(id)))); } catch (e) { /* storage unavailable */ } };
+const state = { metric: 'billed', range: '30d', models: loadModels(), role: 'all', path: [], focus: [] };
+const CLASSES = [{ id: 'anthropic', label: 'Claude' }, { id: 'openai', label: 'GPT' }];
+const providerOf = id => (DATA.models.find(m => m.id === id) || {}).provider || 'other';
+const zero = () => ({ billed: 0, unique: 0, usd: 0 });
+function deriveLeaf(leaf) {
+  const ri = DATA.ranges.findIndex(r => r.id === state.range), out = zero();
+  const byModel = (leaf.v || [])[ri] || [];
+  MODEL_IDS.forEach((mid, mi) => {
+    if (!state.models.has(mid)) return;
+    const byRole = byModel[mi] || [];
+    ROLE_IDS.forEach((rid, k) => {
+      if (state.role !== 'all' && state.role !== rid) return;
+      const c = byRole[k];
+      if (c) { out.billed += c[0]; out.unique += c[1]; out.usd += c[2]; }
+    });
+  });
+  return out;
+}
+function computeAll() {
+  const vals = new Map();
+  const walk = (node, cat) => {
+    let v;
+    if (node.children) {
+      v = zero();
+      for (const c of node.children) {
+        const cv = walk(c, cat || c.id);
+        v.billed += cv.billed; v.unique += cv.unique; v.usd += cv.usd;
+      }
+    } else v = deriveLeaf(node);
+    vals.set(node.id, v);
+    return v;
+  };
+  walk(ROOT, null);
+  return vals;
+}
+function fmt(n, metric) {
+  if (metric === 'usd') {
+    if (n >= 1e4) return '$' + (n / 1e3).toFixed(1) + 'K';
+    if (n >= 100) return '$' + Math.round(n).toLocaleString('en-US');
+    if (n >= 1) return '$' + n.toFixed(2);
+    return n > 0 ? '$' + n.toFixed(3) : '$0';
+  }
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'K';
+  return String(Math.round(n));
+}
+const pct = x => !x ? '0%' : x < 0.001 ? '<0.1%' : (x * 100).toFixed(x < 0.1 ? 1 : 0) + '%';
+const $ = id => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const NS = 'http://www.w3.org/2000/svg';
+const sv = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
+const clip = (s, w, px) => { const n = Math.floor(w / px); return s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s; };
+function buildControls() {
+  const seg = (host, items, key) => {
+    host.replaceChildren();
+    for (const it of items) {
+      const b = el('button', null, it.label);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(state[key] === it.id));
+      b.addEventListener('click', () => { state[key] = it.id; buildControls(); buildModels(); render(); });
+      host.append(b);
+    }
+  };
+  seg($('f-range'), DATA.ranges, 'range');
+  seg($('f-metric'), METRICS, 'metric');
+  const sel = (host, items, key, allLabel) => {
+    if (!host.options.length) {
+      host.append(new Option(allLabel, 'all'));
+      for (const it of items) host.append(new Option(it.label, it.id));
+      host.addEventListener('change', () => { state[key] = host.value; buildModels(); render(); });
+    }
+    host.value = state[key];
+  };
+  sel($('f-role'), DATA.roles, 'role', 'All roles');
+}
+// Per-model totals over the whole tree for the current range and role, ignoring the model selection.
+function modelTotals() {
+  const ri = DATA.ranges.findIndex(r => r.id === state.range);
+  const t = MODEL_IDS.map(() => zero()), seen = MODEL_IDS.map(() => false);
+  const walk = n => {
+    if (n.children) return n.children.forEach(walk);
+    (n.v || []).forEach((byModel, r) => (byModel || []).forEach((byRole, mi) => {
+      if (byRole && byRole.some(Boolean)) seen[mi] = true;
+      if (r !== ri || !byRole) return;
+      ROLE_IDS.forEach((rid, k) => {
+        const c = byRole[k];
+        if (!c || (state.role !== 'all' && state.role !== rid)) return;
+        t[mi].billed += c[0]; t[mi].unique += c[1]; t[mi].usd += c[2];
+      });
+    }));
+  };
+  walk(ROOT);
+  return { t, seen };
+}
+function setModels(ids) {
+  state.models = new Set(ids);
+  saveModels();
+  buildModels();
+  render();
+}
+function buildModels() {
+  const { t, seen } = modelTotals(), m = state.metric;
+  const shown = MODEL_IDS.filter((id, i) => seen[i]);
+  const grand = shown.reduce((a, id) => a + t[MODEL_IDS.indexOf(id)][m], 0);
+  const same = ids => ids.length === state.models.size && ids.every(id => state.models.has(id));
+  const host = $('f-mclass');
+  host.replaceChildren();
+  const btn = (label, pressed, title, onClick) => {
+    const b = el('button', null, label);
+    b.type = 'button';
+    b.title = title;
+    b.setAttribute('aria-pressed', String(pressed));
+    b.addEventListener('click', onClick);
+    host.append(b);
+  };
+  btn('All', same(shown), 'Select every model', () => setModels(shown));
+  btn('None', state.models.size === 0, 'Clear the selection', () => setModels([]));
+  for (const cl of CLASSES) {
+    const ids = shown.filter(id => providerOf(id) === cl.id);
+    btn(cl.label, ids.length > 0 && same(ids), `Only ${cl.label} models (shift-click: add or remove ${cl.label} models)`, e => {
+      if (!e.shiftKey) return setModels(ids);
+      const all = ids.every(id => state.models.has(id));
+      setModels(all ? [...state.models].filter(id => !ids.includes(id)) : [...state.models, ...ids]);
+    });
+  }
+  const list = $('f-mlist');
+  list.replaceChildren();
+  for (const id of shown) {
+    const mi = MODEL_IDS.indexOf(id), on = state.models.has(id), v = t[mi];
+    const row = el('label', 'mi' + (on ? '' : ' off'));
+    const cb = el('input');
+    cb.type = 'checkbox'; cb.checked = on; cb.value = id;
+    cb.addEventListener('change', () => setModels(cb.checked ? [...state.models, id] : [...state.models].filter(x => x !== id)));
+    const name = DATA.models[mi].label;
+    row.title = `${name}: ${fmt(v.billed, 'billed')} billed tokens, ${fmt(v.usd, 'usd')}`;
+    row.append(cb, el('span', 'lb', name), el('span', 'vv', fmt(v.billed, 'billed')), el('span', 'pp', fmt(v.usd, 'usd')),
+      el('span', 'pp', pct(grand ? v[m] / grand : 0)));
+    list.append(row);
+  }
+}
+const tip = $('tip');
+function showTip(ev, label, v, parentV, rootV, node) {
+  const m = state.metric;
+  tip.replaceChildren(el('div', 'tv', fmt(v[m], m)), el('div', 'tl', label));
+  const rows = [['Share of parent', pct(parentV ? v[m] / parentV : 0)], ['Share of total', pct(rootV ? v[m] / rootV : 0)],
+    ...METRICS.filter(x => x.id !== m).map(x => [x.label, fmt(v[x.id], x.id)])];
+  if (v.unique) rows.push(['Avg reads per token', (v.billed / v.unique).toFixed(1) + '×']);
+  const basis = node && basisOf(node);
+  if (basis) rows.push(['Basis', basis]);
+  for (const [a, b] of rows) { const r = el('div', 'tr'); r.append(el('span', null, a), el('b', null, b)); tip.append(r); }
+  tip.style.display = 'block';
+  const host = $('tkd').getBoundingClientRect();
+  const x = ev.clientX - host.left + 14, y = ev.clientY - host.top + 14;
+  tip.style.left = Math.max(0, Math.min(x, host.width - tip.offsetWidth)) + 'px';
+  tip.style.top = y + 'px';
+}
+function basisOf(node) {
+  const set = new Set(), walk = n => n.children ? n.children.forEach(walk) : set.add(n.basis || 'estimated');
+  walk(node);
+  return set.size === 1 ? [...set][0] : 'mixed: ' + [...set].sort().join(', ');
+}
+const hideTip = () => { tip.style.display = 'none'; };
+// Expands (or collapses) a segment with children and shows its details; a leaf is only selected.
+// Collapsing a segment, or clicking the selected leaf again, shows the parent's details.
+function select(level, id, drill) {
+  const up = state.path.slice(0, level);
+  if (drill) {
+    state.path = state.path[level] === id ? up : up.concat(id);
+    state.focus = state.path.slice();
+  } else {
+    const same = state.focus.length === level + 1 && state.focus[level] === id;
+    state.path = up;
+    state.focus = same ? up : up.concat(id);
+  }
+  // the re-render replaces the clicked element; give keyboard focus back to its replacement
+  const act = document.activeElement, where = act && act.closest && (act.closest('#chart') ? 'chart' : null);
+  render();
+  if (where) {
+    const t = $('chart').querySelector(`[data-id="${id}"]`);
+    if (t) t.focus({ preventScroll: true });
+  }
+}
+function render() {
+  hideTip();
+  const m = state.metric, vals = computeAll(), rootV = vals.get('root')[m];
+  const cols = [ROOT];
+  // the selection may hide a drilled-into node; stop the path at the first one with nothing left
+  const keep = [];
+  for (const id of state.path) {
+    const c = cols[cols.length - 1].children.find(x => x.id === id);
+    if (!c || !(vals.get(c.id)[m] > 0)) break;
+    cols.push(c); keep.push(id);
+  }
+  state.path = keep;
+  // the focus is the path or one leaf below it; drop what the filters hid before the bars are drawn
+  const fkeep = [];
+  for (let n = ROOT, i = 0; i < state.focus.length; i++) {
+    const c = (n.children || []).find(x => x.id === state.focus[i]);
+    if (!c || !(vals.get(c.id)[m] > 0)) break;
+    fkeep.push(c.id); n = c;
+  }
+  state.focus = fkeep;
+  if (!(rootV > 0)) return renderEmpty(state.models.size ? 'No usage for the selected models in this range and role.' : 'No models selected. Pick at least one model above.');
+  const H = 400, TOP = 46, COLW = 120, GAP = 52;
+  const last = cols[cols.length - 1];
+  const ghost = last.children.some(c => c.children);
+  const nCols = cols.length + (ghost ? 1 : 0);
+  const W = nCols * COLW + (nCols - 1) * GAP;
+  const svg = $('chart');
+  svg.replaceChildren();
+  svg.setAttribute('width', W); svg.setAttribute('height', TOP + H);
+  svg.setAttribute('viewBox', `0 0 ${W} ${TOP + H}`);
+  const kidsOf = node => node.children.map((c, i) => ({ node: c, idx: i, v: vals.get(c.id) }))
+    .filter(k => k.v[m] > 0).sort((a, b) => b.v[m] - a.v[m]);
+  let pending = null;
+  cols.forEach((node, level) => {
+    const x = level * (COLW + GAP), total = vals.get(node.id)[m];
+    svg.append(sv('text', { x, y: 14, class: 'hd' }, clip(node.label, COLW + GAP - 10, 6.4)));
+    svg.append(sv('text', { x, y: 34, class: 'hv' }, fmt(total, m) + (level ? `  ·  ${pct(total / rootV)}` : '')));
+    if (pending) {
+      const { y0, y1, color } = pending, x1 = x - GAP, xm = x - GAP / 2;
+      svg.append(sv('path', { d: `M${x1},${y0} C${xm},${y0} ${xm},${TOP} ${x},${TOP} L${x},${TOP + H} C${xm},${TOP + H} ${xm},${y1} ${x1},${y1} Z`, fill: color, 'fill-opacity': .18 }));
+      pending = null;
+    }
+    const kids = kidsOf(node), selId = state.path[level];
+    const pick = selId || (state.focus.length === level + 1 ? state.focus[level] : null);
+    let y = TOP;
+    for (const k of kids) {
+      const h = total ? k.v[m] / total * H : 0;
+      const color = k.idx < COLORS.length ? COLORS[k.idx] : 'var(--other)';
+      const ink = k.idx < COLORS.length ? INK[k.idx] : 'var(--fg)';
+      const drill = !!k.node.children, isSel = pick === k.node.id;
+      const r = sv('rect', { x, y: y + .5, width: COLW, height: Math.max(h - 1, .5), rx: 3, fill: color,
+        class: 'seg-r drill' + (isSel ? ' sel' : ''), opacity: pick && !isSel ? .45 : 1, 'data-id': k.node.id });
+      r.setAttribute('aria-label', `${k.node.label}: ${fmt(k.v[m], m)}, ${pct(k.v[m] / total)} of ${node.label}`);
+      r.setAttribute('tabindex', 0); r.setAttribute('role', 'button');
+      r.setAttribute('aria-pressed', String(isSel));
+      r.addEventListener('click', () => select(level, k.node.id, drill));
+      r.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(level, k.node.id, drill); } });
+      r.addEventListener('pointermove', e => showTip(e, k.node.label + (drill ? '  ›' : ''), k.v, total, rootV, k.node));
+      r.addEventListener('pointerleave', hideTip);
+      svg.append(r);
+      const op = pick && !isSel ? .6 : 1;
+      if (h >= 34) {
+        svg.append(sv('text', { x: x + 7, y: y + 15, class: 'sl', fill: ink, opacity: op }, clip(k.node.label + (drill ? ' ›' : ''), COLW - 12, 6.3)));
+        svg.append(sv('text', { x: x + 7, y: y + 28, class: 'sv', fill: ink, opacity: op }, `${fmt(k.v[m], m)} · ${pct(k.v[m] / total)}`));
+      } else if (h >= 16) {
+        svg.append(sv('text', { x: x + 7, y: y + h / 2 + 4, class: 'sl', fill: ink, opacity: op }, clip(k.node.label, COLW - 12, 6.3)));
+      }
+      if (selId === k.node.id) pending = { y0: y, y1: y + h, color };
+      y += h;
+    }
+  });
+  if (ghost) {
+    const x = cols.length * (COLW + GAP);
+    svg.append(sv('rect', { x: x + .5, y: TOP + .5, width: COLW - 1, height: H - 1, rx: 4, class: 'ghost' }));
+    ['Click a segment', 'marked › to', 'break it down'].forEach((t, i) =>
+      svg.append(sv('text', { x: x + COLW / 2, y: TOP + H / 2 - 14 + i * 16, class: 'gt', 'text-anchor': 'middle' }, t)));
+  }
+  const wrap = $('wrap');
+  wrap.scrollLeft = wrap.scrollWidth;
+  renderDetail(vals);
+}
+const EDGES = DATA.meta.size_bin_edges || [];
+const NBINS = EDGES.length + 1;
+const tok = n => n >= 1e6 ? (n / 1e6) + 'M' : n >= 1e3 ? (n / 1e3) + 'K' : String(n);
+const binLabel = b => b === 0 ? `< ${tok(EDGES[0])}` : b === EDGES.length ? `≥ ${tok(EDGES[b - 1])}` : `${tok(EDGES[b - 1])}–${tok(EDGES[b])}`;
+// Per-model totals and size bins of a node, under the current range, role and model selection.
+function nodeStats(node) {
+  const ri = DATA.ranges.findIndex(r => r.id === state.range);
+  const byModel = MODEL_IDS.map(() => zero());
+  const bins = Array.from({ length: NBINS }, () => ({ n: 0, billed: 0, unique: 0, usd: 0 }));
+  const walk = n => {
+    if (n.children) return n.children.forEach(walk);
+    const vr = (n.v || [])[ri] || [], hr = (n.h || [])[ri] || [];
+    MODEL_IDS.forEach((mid, mi) => {
+      if (!state.models.has(mid)) return;
+      ROLE_IDS.forEach((rid, k) => {
+        if (state.role !== 'all' && state.role !== rid) return;
+        const c = (vr[mi] || [])[k];
+        if (c) { byModel[mi].billed += c[0]; byModel[mi].unique += c[1]; byModel[mi].usd += c[2]; }
+        for (const [b, cnt, billed, unique, usd] of ((hr[mi] || [])[k] || [])) {
+          const t = bins[b];
+          t.n += cnt; t.billed += billed; t.unique += unique; t.usd += usd;
+        }
+      });
+    });
+  };
+  walk(node);
+  return { byModel, bins };
+}
+function tipRows(ev, value, label, rows) {
+  tip.replaceChildren(el('div', 'tv', value), el('div', 'tl', label));
+  for (const [a, b] of rows) { const r = el('div', 'tr'); r.append(el('span', null, a), el('b', null, b)); tip.append(r); }
+  tip.style.display = 'block';
+  const host = $('tkd').getBoundingClientRect();
+  const x = ev.clientX - host.left + 14, y = ev.clientY - host.top + 14;
+  tip.style.left = Math.max(0, Math.min(x, host.width - tip.offsetWidth)) + 'px';
+  tip.style.top = y + 'px';
+}
+// Instruction-file nodes (fl) and explicit tool-result reads of the same file (xf), each with its id chain.
+const XREF = { fl: new Map(), xf: new Map() };
+(function index(n, ids) {
+  for (const k of ['fl', 'xf']) if (n[k]) { if (!XREF[k].has(n[k])) XREF[k].set(n[k], []); XREF[k].get(n[k]).push({ node: n, ids }); }
+  (n.children || []).forEach(c => index(c, ids.concat(c.id)));
+})(ROOT, []);
+// The other side of an instruction file: its explicit reads for a file node (or a method leaf below one),
+// and its context loads for an explicit read. Null when the file has none under the current filters.
+function xrefOf(chain, vals) {
+  const m = state.metric, node = chain[chain.length - 1];
+  let kind = 'xf', label = node.xf;
+  if (!label) { const f = chain.slice().reverse().find(n => n.fl); if (!f) return null; kind = 'fl'; label = f.fl; }
+  const other = (XREF[kind === 'fl' ? 'xf' : 'fl'].get(label) || []).filter(t => vals.get(t.node.id)[m] > 0);
+  if (!other.length) return null;
+  let x = 0, occ = 0;
+  for (const t of other) { x += vals.get(t.node.id)[m]; occ += nodeStats(t.node).bins.reduce((a, b) => a + b.n, 0); }
+  return { kind, x, occ, target: other.reduce((a, t) => vals.get(t.node.id)[m] > vals.get(a.node.id)[m] ? t : a) };
+}
+function renderDetail(vals) {
+  const m = state.metric, box = $('detail');
+  // render() has already trimmed the focus to nodes with usage under the filters
+  const chain = [ROOT];
+  for (const id of state.focus) chain.push(chain[chain.length - 1].children.find(x => x.id === id));
+  const node = chain[chain.length - 1], parent = chain[chain.length - 2];
+  const v = vals.get(node.id), rootV = vals.get('root')[m];
+  const { byModel, bins } = nodeStats(node);
+  const occ = bins.reduce((a, b) => a + b.n, 0);
+  box.replaceChildren();
+  box.dataset.id = node.id;
+  box.append(el('h2', null, node.label + (node.children ? ' ›' : '')),
+    el('div', 'dpath', chain.length > 1 ? chain.slice(0, -1).map(n => n.label).join(' › ') : 'Every token in the selected range, role and models'));
+  const stats = el('div', 'stats');
+  const stat = (k, x, key) => { const s = el('div', 'st'); s.append(el('div', 'k', k), el('div', 'x', x)); if (key) s.dataset.k = key; stats.append(s); };
+  stat(METRICS.find(x => x.id === m).label, fmt(v[m], m), 'value');
+  stat('Share of parent', parent ? pct(vals.get(parent.id)[m] ? v[m] / vals.get(parent.id)[m] : 0) : '–', 'parent');
+  stat('Share of total', pct(rootV ? v[m] / rootV : 0), 'total');
+  stat('Occurrences', occ.toLocaleString('en-US'), 'occ');
+  let acc = 0, med = -1;
+  for (let b = 0; b < NBINS && occ; b++) { acc += bins[b].n; if (med < 0 && acc >= occ / 2) med = b; }
+  stat('Typical size (median)', med < 0 ? '–' : binLabel(med) + ' tok', 'median');
+  box.append(stats);
+  const xr = xrefOf(chain, vals);
+  if (xr) {
+    const p = el('p', 'xref'), go = el('button', null, xr.kind === 'fl' ? 'Show the reads' : 'Show the file');
+    go.type = 'button';
+    go.addEventListener('click', () => { state.path = xr.target.ids.slice(0, -1); state.focus = xr.target.ids.slice(); render(); });
+    const what = `${fmt(xr.x, m)} / ${xr.occ.toLocaleString('en-US')} ${xr.occ === 1 ? 'occurrence' : 'occurrences'}`;
+    p.append(xr.kind === 'fl' ? `Also read explicitly: ${what} (counted under Tool results). ` : `Also in context as an instruction file: ${what}. `, go);
+    p.dataset.xref = xr.kind;
+    box.append(p);
+  }
+
+  // donut: share of the metric by model
+  box.append(el('h3', null, `${METRICS.find(x => x.id === m).label} by model`));
+  const rows = MODEL_IDS.map((id, mi) => ({ id, label: DATA.models[mi].label, x: Math.max(0, byModel[mi][m]) }))
+    .filter(r => r.x > 0).sort((a, b) => b.x - a.x);
+  const shown = rows.length > COLORS.length ? rows.slice(0, COLORS.length - 1) : rows;
+  if (rows.length > shown.length) {
+    const rest = rows.slice(shown.length);
+    shown.push({ id: '', label: `Other (${rest.length} models)`, x: rest.reduce((a, r) => a + r.x, 0), other: true });
+  }
+  const sum = shown.reduce((a, r) => a + r.x, 0);
+  const dw = el('div', 'donut');
+  const S = 132, R = 50, SW = 20, C = 2 * Math.PI * R;
+  const d = sv('svg', { width: S, height: S, viewBox: `0 0 ${S} ${S}`, role: 'img', 'aria-label': 'Share by model', id: 'donut' });
+  d.append(sv('circle', { cx: S / 2, cy: S / 2, r: R, fill: 'none', class: 'ax', 'stroke-width': SW }));
+  let off = 0;
+  const lg = el('div', 'legend');
+  shown.forEach((r, i) => {
+    const share = sum ? r.x / sum : 0, color = r.other ? 'var(--other)' : COLORS[i];
+    const arc = sv('circle', { cx: S / 2, cy: S / 2, r: R, fill: 'none', stroke: color, 'stroke-width': SW,
+      'stroke-dasharray': `${share * C} ${C}`, 'stroke-dashoffset': -off * C, transform: `rotate(-90 ${S / 2} ${S / 2})`,
+      'data-share': share, 'data-model': r.id });
+    arc.addEventListener('pointermove', e => tipRows(e, fmt(r.x, m), r.label, [['Share of this segment', pct(share)]]));
+    arc.addEventListener('pointerleave', hideTip);
+    d.append(arc);
+    off += share;
+    const it = el('div', 'li'), sw = el('span', 'sw');
+    sw.style.background = color;
+    it.append(sw, el('span', 'lb', r.label), el('span', 'vv', fmt(r.x, m)), el('span', 'pp', pct(share)));
+    lg.append(it);
+  });
+  d.append(sv('text', { x: S / 2, y: S / 2 + 2, class: 'dc', 'text-anchor': 'middle' }, fmt(v[m], m)));
+  d.append(sv('text', { x: S / 2, y: S / 2 + 16, class: 'dk', 'text-anchor': 'middle' }, rows.length === 1 ? '1 model' : `${rows.length} models`));
+  dw.append(d, lg);
+  box.append(dw);
+
+  // histogram: occurrences and share of the metric by occurrence size
+  const key = { billed: 'billed', unique: 'unique', usd: 'usd' }[m];
+  const binTotal = bins.reduce((a, b) => a + Math.max(0, b[key]), 0);
+  box.append(el('h3', null, 'Size of each occurrence (estimated tokens)'));
+  const W = Math.max(240, Math.min(560, box.clientWidth - 30)), PL = 4, PH = 70, LBL = 14, GAPY = 26;
+  const H = 12 + 2 * PH + GAPY + LBL + 4, bw = (W - PL) / NBINS;
+  const hs = sv('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'group', 'aria-label': 'Occurrence size histogram', id: 'hist' });
+  const maxN = Math.max(1, ...bins.map(b => b.n)), maxS = Math.max(1e-12, ...bins.map(b => binTotal ? Math.max(0, b[key]) / binTotal : 0));
+  const panels = [
+    { y: 12, t: 'Occurrences', f: b => b.n / maxN, cls: 'hb' },
+    { y: 12 + PH + GAPY, t: `Share of ${METRICS.find(x => x.id === m).label.toLowerCase()}`, f: b => (binTotal ? Math.max(0, b[key]) / binTotal : 0) / maxS, cls: 'hb2' },
+  ];
+  for (const pnl of panels) {
+    hs.append(sv('text', { x: PL, y: pnl.y - 3, class: 'at' }, pnl.t));
+    hs.append(sv('line', { x1: PL, x2: W, y1: pnl.y + PH + .5, y2: pnl.y + PH + .5, class: 'ax' }));
+    bins.forEach((b, i) => {
+      const h = pnl.f(b) * (PH - 12), x = PL + i * bw;
+      if (h > 0) hs.append(sv('rect', { x: x + 1, y: pnl.y + PH - Math.max(h, 1), width: Math.max(bw - 2, 1), height: Math.max(h, 1), rx: 2, class: pnl.cls }));
+    });
+  }
+  bins.forEach((b, i) => {
+    const share = binTotal ? Math.max(0, b[key]) / binTotal : 0, x = PL + i * bw;
+    const hit = sv('rect', { x, y: 0, width: bw, height: H - LBL, class: 'hit', 'data-bin': i, 'data-n': b.n, 'data-x': b[key], 'data-share': share });
+    const head = b.n.toLocaleString('en-US') + (b.n === 1 ? ' occurrence' : ' occurrences'), sub = binLabel(i) + ' tokens each';
+    const trows = [[METRICS.find(x => x.id === m).label, fmt(b[key], m)], ['Share of this segment', pct(share)],
+      ['Share of occurrences', pct(occ ? b.n / occ : 0)]];
+    hit.setAttribute('tabindex', 0);
+    hit.setAttribute('aria-label', `${sub}: ${head}, ${trows.map(([a, x]) => `${a} ${x}`).join(', ')}`);
+    hit.addEventListener('pointermove', e => tipRows(e, head, sub, trows));
+    hit.addEventListener('focus', () => { const r = hit.getBoundingClientRect(); tipRows({ clientX: r.right, clientY: r.top }, head, sub, trows); });
+    hit.addEventListener('pointerleave', hideTip);
+    hit.addEventListener('blur', hideTip);
+    hs.append(hit);
+  });
+  const axisY = H - 4;
+  EDGES.forEach((e, i) => {
+    if (!/^1/.test(String(e))) return;
+    const x = PL + (i + 1) * bw;
+    hs.append(sv('line', { x1: x, x2: x, y1: panels[1].y + PH, y2: panels[1].y + PH + 4, class: 'ax' }));
+    hs.append(sv('text', { x, y: axisY, class: 'at', 'text-anchor': 'middle' }, tok(e)));
+  });
+  box.append(hs);
+  box.append(el('p', 'note', 'Each block, tool call, tool result or output counts once, in the bin of its own size; every later re-read adds its tokens to that same bin. Prefix sections count once per snapshot.'));
+}
+function renderEmpty(msg) {
+  const svg = $('chart'), W = 420, H = 120;
+  svg.replaceChildren();
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.append(sv('rect', { x: .5, y: .5, width: W - 1, height: H - 1, rx: 6, class: 'ghost' }));
+  svg.append(sv('text', { x: W / 2, y: H / 2 + 5, class: 'empty', 'text-anchor': 'middle', id: 'empty-msg' }, msg));
+  $('detail').replaceChildren(el('p', 'note', msg));
+}
+$('src-pill').textContent = DATA.meta.pill;
+$('src-pill').title = DATA.meta.pillTitle || '';
+if (DATA.meta.coverageNote) { $('coverage').textContent = DATA.meta.coverageNote; $('coverage').hidden = false; }
+buildControls();
+buildModels();
+render();
+let resizeQueued = false;
+window.addEventListener('resize', () => {
+  if (resizeQueued) return;
+  resizeQueued = true;
+  requestAnimationFrame(() => { resizeQueued = false; render(); });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+.venv/
+build/
+dist/
+*.spec
+token-*.json
+token-*.html
+shot-*.png
+__pycache__/
