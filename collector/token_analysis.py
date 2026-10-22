@@ -16,6 +16,11 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import collect  # noqa: E402
 
+try:
+    from _version import VERSION  # written by build.sh
+except ImportError:
+    VERSION = 'dev'
+
 APP_ID = 'token-analysis'
 PHASES = {'parse': 'Reading session logs', 'check': 'Cross-checking usage', 'attribute': 'Attributing tokens'}
 BAR = 30
@@ -77,6 +82,7 @@ def main(argv=None):
                     help='where token-data.json and token-drilldown.html go (default ~/Library/Application Support/%s)'
                     % APP_ID)
     ap.add_argument('--no-browser', action='store_true', help='do not open the dashboard in a browser')
+    ap.add_argument('--version', action='version', version='%(prog)s ' + VERSION)
     args, collect_args = ap.parse_known_args(argv)
     for a in collect_args:
         name = a.split('=', 1)[0]

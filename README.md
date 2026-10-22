@@ -28,12 +28,19 @@ ln -s "$PWD/dist/token-analysis" ~/.local/bin/token-analysis
 
 macOS can block the unsigned binary on first launch. If it does, allow it in System Settings > Privacy & Security. The binary is built for the architecture of the Mac that builds it.
 
+Prebuilt binaries for Apple silicon (`arm64`) and Intel (`x86_64`) Macs are attached to each [GitHub release](https://github.com/filip-gooddata/token-analysis/releases). `token-analysis --version` prints the version.
+
+## Releases
+
+Every pull request runs `.github/workflows/ci.yml`, which runs the tests. Every push to `main` runs `.github/workflows/release.yml`. It runs the tests, builds both binaries, tags the commit with the next version and publishes a release. The version bumps the patch number of the latest `vX.Y.Z` tag. Put `#minor` or `#major` in a commit message to bump that part instead. The first release is `v0.1.0`.
+
 ## Options
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--out-dir PATH` | `~/Library/Application Support/token-analysis` | Where `token-data.json` and `token-drilldown.html` are written. Each run replaces them. |
 | `--no-browser` | off | Collect and print the dashboard path, but do not open the browser. |
+| `--version` | | Print the version and exit. |
 
 Other flags go to the collector, for example `--lookback 7`, `--top-files 20`, or `--end 2026-10-20T12:00:00+02:00`. Use `python3 -I collector/collect.py --help` for the full list. `--out`, `--html`, and `--template` are not accepted, because `token-analysis` sets them; use `--out-dir` to choose where the files go.
 
