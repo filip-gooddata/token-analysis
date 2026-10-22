@@ -1,0 +1,27 @@
+.gitignore
+  s_378f019df04c10::t_2e0bcf38146cac 9
+README.md
+  s_378f019df04c10::t_199f459f06f326 31-36,43
+build.sh
+  s_378f019df04c10::t_30fed2cea91a57 4,11
+collector/token_analysis.py
+  s_378f019df04c10::t_41113c99489183 19-23,85
+.github/workflows/release.yml
+  s_378f019df04c10::t_27294bf3336dd0 1-114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c84494bb34237c2605016f7bf83b6e0831bb92d",
+  "prompts": {},
+  "sessions": {
+    "s_378f019df04c10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c5c8fe78-d25c-4d16-8cc0-3d2b10ef83d6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Filip Kalný <filip.kalny@gooddata.com>"
+    }
+  }
+}
