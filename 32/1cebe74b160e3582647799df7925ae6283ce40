@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_378f019df04c10::t_aae23055f9cd8b 1-28
+README.md
+  s_378f019df04c10::t_199364191e5e91 35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "321cebe74b160e3582647799df7925ae6283ce40",
+  "prompts": {},
+  "sessions": {
+    "s_378f019df04c10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c5c8fe78-d25c-4d16-8cc0-3d2b10ef83d6",
+        "model": "unknown"
+      },
+      "human_author": "Filip Kalný <filip.kalny@gooddata.com>"
+    }
+  }
+}
