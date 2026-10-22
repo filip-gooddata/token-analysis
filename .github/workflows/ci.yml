@@ -1,4 +1,4 @@
-# On every pull request: run the tests and check that the binary builds.
+# On every pull request: run the tests. The macOS binaries are built only by release.yml.
 name: CI
 
 on:
@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,10 +19,3 @@ jobs:
         run: |
           python -I collector/test_collect.py
           python -I collector/test_token_analysis.py
-      - name: Build
-        env:
-          PYTHON: python
-          VERSION: pr-${{ github.event.pull_request.number }}
-        run: ./build.sh
-      - name: Check binary
-        run: ./dist/token-analysis --version | grep -qx "token-analysis pr-${{ github.event.pull_request.number }}"
