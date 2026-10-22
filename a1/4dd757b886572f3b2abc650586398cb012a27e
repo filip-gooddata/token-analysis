@@ -1,26 +1,26 @@
 .gitignore
   s_4ad49d3bd9cd31::t_4692d5b76b1e16 1-8
-README.md
-  s_4ad49d3bd9cd31::t_10f198067f4d33 1-83
-build.sh
-  s_4ad49d3bd9cd31::t_db77e2ae715324 1-16
-collector/README.md
-  s_4ad49d3bd9cd31::t_61e89f94a97be4 1-173
 collector/collect.py
   s_4ad49d3bd9cd31::t_d4868064fa343b 1-3355
-collector/template.html
-  s_4ad49d3bd9cd31::t_b4256bfb2c8eb1 1-609
-collector/test_collect.py
-  s_4ad49d3bd9cd31::t_f433602f1daac1 1-2370
+README.md
+  s_4ad49d3bd9cd31::t_10f198067f4d33 1-83
 collector/test_token_analysis.py
   s_4ad49d3bd9cd31::t_82dc5fab2fd080 1-166
+collector/template.html
+  s_4ad49d3bd9cd31::t_b4256bfb2c8eb1 1-609
+build.sh
+  s_4ad49d3bd9cd31::t_db77e2ae715324 1-16
+collector/test_collect.py
+  s_4ad49d3bd9cd31::t_f433602f1daac1 1-2370
 collector/token_analysis.py
   s_4ad49d3bd9cd31::t_b26f715303832f 1-107
+collector/README.md
+  s_4ad49d3bd9cd31::t_61e89f94a97be4 1-173
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.5",
-  "base_commit_sha": "1f936a41f702accf8d921c90a1900b3dc74ab05d",
+  "base_commit_sha": "a14dd757b886572f3b2abc650586398cb012a27e",
   "prompts": {},
   "sessions": {
     "s_4ad49d3bd9cd31": {
