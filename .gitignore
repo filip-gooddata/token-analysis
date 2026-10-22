@@ -6,3 +6,4 @@ token-*.json
 token-*.html
 shot-*.png
 __pycache__/
+collector/_version.py

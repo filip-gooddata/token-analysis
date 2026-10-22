@@ -1,0 +1,114 @@
+# On every push to main: run the tests, bump the version, build the macOS binaries and publish them as a GitHub release.
+#
+# The version is the latest vX.Y.Z tag plus a patch bump. Put #minor or #major in a commit message to bump that part
+# instead. The first release is v0.1.0.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.next.outputs.tag }}
+      skip: ${{ steps.next.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: next
+        run: |
+          if git tag --points-at HEAD | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "HEAD is already released"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          last=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          if [ -z "$last" ]; then
+            next=v0.1.0
+          else
+            IFS=. read -r major minor patch <<< "${last#v}"
+            log=$(git log --format=%B "$last..HEAD")
+            if grep -q '#major' <<< "$log"; then
+              next="v$((major + 1)).0.0"
+            elif grep -q '#minor' <<< "$log"; then
+              next="v$major.$((minor + 1)).0"
+            else
+              next="v$major.$minor.$((patch + 1))"
+            fi
+          fi
+          echo "${last:-none} -> $next"
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    if: needs.version.outputs.skip != 'true'
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Test
+        run: |
+          python -I collector/test_collect.py
+          python -I collector/test_token_analysis.py
+      - name: Build
+        env:
+          PYTHON: python
+          VERSION: ${{ needs.version.outputs.tag }}
+        run: ./build.sh
+      - name: Check binary
+        run: |
+          test "$(uname -m)" = "${{ matrix.arch }}"
+          ./dist/token-analysis --version
+          ./dist/token-analysis --version | grep -qx "token-analysis ${{ needs.version.outputs.tag }}"
+      - name: Package
+        run: |
+          name=token-analysis-${{ needs.version.outputs.tag }}-macos-${{ matrix.arch }}
+          tar -czf "$name.tar.gz" -C dist token-analysis
+          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: token-analysis-*.tar.gz*
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          gh release create "$TAG" assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes
