@@ -32,7 +32,7 @@ Prebuilt binaries for Apple silicon (`arm64`) and Intel (`x86_64`) Macs are atta
 
 ## Releases
 
-Every push to `main` runs `.github/workflows/release.yml`. It runs the tests, builds both binaries, tags the commit with the next version and publishes a release. The version bumps the patch number of the latest `vX.Y.Z` tag. Put `#minor` or `#major` in a commit message to bump that part instead. The first release is `v0.1.0`.
+Every pull request runs `.github/workflows/ci.yml`, which runs the tests and checks that the binary builds. Every push to `main` runs `.github/workflows/release.yml`. It runs the tests, builds both binaries, tags the commit with the next version and publishes a release. The version bumps the patch number of the latest `vX.Y.Z` tag. Put `#minor` or `#major` in a commit message to bump that part instead. The first release is `v0.1.0`.
 
 ## Options
 

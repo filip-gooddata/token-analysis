@@ -1,0 +1,28 @@
+# On every pull request: run the tests and check that the binary builds.
+name: CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Test
+        run: |
+          python -I collector/test_collect.py
+          python -I collector/test_token_analysis.py
+      - name: Build
+        env:
+          PYTHON: python
+          VERSION: pr-${{ github.event.pull_request.number }}
+        run: ./build.sh
+      - name: Check binary
+        run: ./dist/token-analysis --version | grep -qx "token-analysis pr-${{ github.event.pull_request.number }}"
