@@ -1,0 +1,19 @@
+collector/template.html
+  s_c035d88e5eaa7c::t_af2085c331fbe4 21-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4ee1831350598cd07cd5f5dfe0f748d74e037fcd",
+  "prompts": {},
+  "sessions": {
+    "s_c035d88e5eaa7c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17891-31fb-7601-879d-bdfe415b563a",
+        "model": "unknown"
+      },
+      "human_author": "Filip Kalný <filip.kalny@gooddata.com>"
+    }
+  }
+}
