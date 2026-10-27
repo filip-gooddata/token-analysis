@@ -1,0 +1,21 @@
+README.md
+  s_415049a45aa707::t_6de8009f8fb22a 65
+collector/template.html
+  s_415049a45aa707::t_9c9863a7d7805f 72-74,81-83,674-726
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0b98f25dfd687f34f2d22677e6f7249d87b9c50e",
+  "prompts": {},
+  "sessions": {
+    "s_415049a45aa707": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "75c5be5e-1d57-4218-a3f8-ba4d46707ba4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Filip Kalný <filip.kalny@gooddata.com>"
+    }
+  }
+}
