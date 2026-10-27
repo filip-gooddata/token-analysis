@@ -158,7 +158,7 @@ Privacy: labels come only from fixed lists in `collect.py`, never from the comma
 
 ### Detail panel
 
-Clicking a segment or a legend item selects it, and the panel to the right of the bars shows its details. A segment with children also expands into a new bar. Clicking an expanded segment collapses it and the panel shows its parent. The panel starts on **All tokens**. It stays in view while the page scrolls, and below 860 px it moves under the bars. Every number follows the current period, role, metric and model filter.
+Clicking a segment or a legend item selects it, and the panel to the right of the bars shows its details. A segment with children also expands into a new bar. Clicking an expanded segment collapses it and the panel shows its parent. The panel starts on **All tokens**. It stays in view while the page scrolls. The chart keeps room for the deepest drill-down in the data, so expanding, collapsing or filtering never resizes it. When the window is too narrow for the full chart beside a usable panel, the panel moves under the bars and the chart narrows to the window width instead of scrolling. Every number follows the current period, role, metric and model filter.
 
 - The header shows the value, its share of the parent and of the total, the occurrence count, and the bin of the median occurrence.
 - The donut splits the value by model. Above six models, the smallest fold into "Other (k models)".
