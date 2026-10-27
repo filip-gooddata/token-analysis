@@ -1,0 +1,23 @@
+collector/README.md
+  s_34e8eb0e4b4e2f::t_9d2a15fb9edfc3 102,106,108
+collector/collect.py
+  s_34e8eb0e4b4e2f::t_8ec68fa09041a2 2008
+collector/test_collect.py
+  s_34e8eb0e4b4e2f::t_1ee90aa0a5f736 2438-2449
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9335a3dc6549cd45e4b47489eb28cdb53208bc17",
+  "prompts": {},
+  "sessions": {
+    "s_34e8eb0e4b4e2f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17d46-9ba2-79e0-ad1d-f8a7a74b07a1",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Filip Kalný <filip.kalny@gooddata.com>"
+    }
+  }
+}
