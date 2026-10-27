@@ -12,8 +12,8 @@ python3 -I collector/collect.py --out token-data.json --html token-drilldown.htm
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--end ISO` | now | End of every range |
-| `--lookback N` | 30 | Days in the longest range (range id stays `30d`) |
+| `--end ISO` | now | End of the collected data (exclusive). Its local day is the last day on the timeline. |
+| `--lookback N` | all history | Read only the last N local calendar days up to `--end` |
 | `--claude-root`, `--codex-root` | `~/.claude/projects`, `~/.codex/sessions` | Log roots |
 | `--template` | `collector/template.html` | HTML template. The data is embedded with `</` escaped. |
 | `--jobs N` | CPU count, max 8 | Parser processes |
@@ -29,15 +29,31 @@ Run the tests with `python3 -I collector/test_collect.py`. The `-m unittest` for
 
 - Claude: `~/.claude/projects/**/*.jsonl`, subagent files included. Each API call is deduplicated by `message.id`, falling back to `requestId`, then `uuid`, and the last usage line wins. A `requestId` that appears on only some lines of a message does not split it.
 - Codex: `~/.codex/sessions/**/*.jsonl`. `token_usage_record` lines are deduplicated by response id. A file with no `token_usage_record` lines falls back to `token_count` events. Each event contributes the difference between its cumulative `total_token_usage` and the previous one. A repeated total is skipped. If the total drops, which means a reset, the event's `last_token_usage` is used.
-- Role: taken from the first subagent-profile tag in any user message (Claude: non-meta user text), so a tag in a later message still counts. If there is no tag, a Claude subagent file is `native` and anything else is `top`. A role value is a lowercase slug (`[a-z][a-z0-9-]{0,31}`); a tag with any other value is not a profile tag and stays prompt text. `roles` lists `top`, `envoy`, `drone`, `review` and `native` in that order, then every other role found in the data, sorted, labelled from its slug (`envoy-peer` shows as **Envoy peer**). Role ids and these labels are the one output text not drawn from a fixed set. The slug pattern bounds them to 32 lowercase letters, digits and hyphens.
+- Role: taken only from the logs. No role configuration file or T3 setup is read or needed; without profile tags every session is `top` or `native`. The role comes from the first subagent-profile tag in any user message (Claude: non-meta user text), so a tag in a later message still counts. If there is no tag, a Claude subagent file is `native` and anything else is `top`. A role value is a lowercase slug (`[a-z][a-z0-9-]{0,31}`); a tag with any other value is not a profile tag and stays prompt text. `roles` lists the roles found in the parsed sessions: `top`, `envoy`, `drone`, `review` and `native` in that order, then every other role, sorted, labelled from its slug (`envoy-peer` shows as **Envoy peer**). Role ids and these labels are the one output text not drawn from a fixed set. The slug pattern bounds them to 32 lowercase letters, digits and hyphens.
 
 ## Accounting
 
-For each call, the measured context is C = input + cache read + cache write. Measured output is reported separately. Per model and range, the leaf sums equal the logged totals exactly. `meta.reconciliation` holds this check for every (range, model) pair.
+For each call, the measured context is C = input + cache read + cache write. Measured output is reported separately. Per model, the leaf sums equal the logged totals exactly, and so do the sums for every day. `meta.reconciliation` holds this check for every model, and `meta.reconciliation_mismatches` lists every disagreeing (day, model) pair.
 
-`meta.oracle` is an independent check. A second, minimal pass re-reads every log and sums the usage fields per (range, model, role). It has its own timestamp parsing and dedup, and it does not use the replay or the attribution. Each row compares the oracle with the leaf sums. Duplicate call keys across files count once in the oracle but once per file in the parser, so a nonzero `cross_file_duplicate_keys` would show up as a mismatch.
+`meta.oracle` is an independent check. A second, minimal pass re-reads every log and sums the usage fields per (day, model, role). It has its own timestamp parsing and dedup, and it does not use the replay or the attribution. Each row compares the oracle with the leaf sums. Duplicate call keys across files count once in the oracle but once per file in the parser, so a nonzero `cross_file_duplicate_keys` would show up as a mismatch.
 
-Timestamps keep their offsets: `Z` and `±HH:MM` are honoured, and stamps without an offset are read as UTC. A range includes its start and excludes its end. `today` starts at local midnight of the `--end` day.
+Timestamps keep their offsets: `Z` and `±HH:MM` are honoured, and stamps without an offset are read as UTC. Each call is counted on its local calendar day, in the collector's time zone, so a day around a DST change has 23 or 25 hours. Data runs up to, but not including, `--end`.
+
+### Timeline
+
+`days` describes the timeline: `first` and `last` local ISO dates and `count` days. `last` is the `--end` day. `first` is the earliest day with data, but at least 30 days before `last` (`MIN_DAYS` = 31 days in all), so the presets always fit. With `--lookback N`, only calls from local midnight of day `last − (N − 1)` on are read, and `meta.collected_from` holds that start; otherwise it is `null`. Calls older than the logs themselves (Claude Code and Codex delete old sessions) are not available, so the left end of the timeline is the coverage limit, not a limit you set.
+
+Each leaf has `v`, a sorted list of sparse rows `[day, model, role, billed, unique, usd]`. `day` indexes from `days.first`, `model` indexes `models` and `role` indexes `roles`. Rows are left out only when all three serialized values and their histogram occurrence counts are 0. `h` is parallel to `v`: for each row, the list of non-empty size bins `[bin, occurrences, billed, unique, usd]`. Unique tokens and dollars are rounded along the days of each leaf and (model, role) pair, so the rows of any run of consecutive days add up to that run's own total within one rounding unit (1 token, $0.0001), and the rows of all days add up to the rounded total. Leaves split from one larger entry, such as shell commands and files, share that entry's rounded rows: each stays within two units of its raw running total, so a run of days is off by less than three units, and a day with no negative value never gets a negative row. A row with no calls of its own, which such rounding can create, takes its bins from the latest earlier day with calls for the same model and role, with 0 occurrences and 0 billed tokens. The dashboard sums the rows inside the selected days, so no period is precomputed. The output has no `ranges` key and no `today`/`7d`/`30d` cells; a template from an older version cannot read it.
+
+The JSON grows with the number of active days. On a synthetic fixture with activity every day (5 roles, 5 models, about 15 commands), it was:
+
+| History | Before (3 ranges) | Day rows |
+|---|---|---|
+| 30 days | 49 KB (12 KB gzip) | 48 KB (14 KB gzip) |
+| 90 days | 62 KB (17 KB gzip) | 139 KB (41 KB gzip) |
+| 400 days | 79 KB (25 KB gzip) | 625 KB (180 KB gzip) |
+
+Use `--lookback` to cap the size. Moving a handle on the 400-day file took under 3 ms per input event in Chrome.
 
 The collector replays each session in order:
 
@@ -65,7 +81,7 @@ Each leaf's tooltip shows its basis strings:
 
 Each group under **Agent instructions → Instruction files** (Rules files, Project AGENTS.md, User CLAUDE.md, and the rest) and the Codex **AGENTS.md instructions** node has one child per file. A group with a single file keeps that file as its one child, so the filename stays visible. Codex sends AGENTS.md as a user message that starts with `# AGENTS.md instructions for <dir>` and ends at `</INSTRUCTIONS>`; that span goes to the AGENTS.md node, split into `~/.codex/AGENTS.md` and the project file at `--- project-doc ---`, and the rest of the message is classified as before. A developer message is treated the same way only when it starts with that wrapper. Developer text that merely mentions AGENTS.md, as Codex's own instructions do, stays under **Developer messages**. File provenance is inferred from the wrapper alone, so a pasted copy of the exact wrapper is counted as a file.
 
-- The group is first allocated as one path, exactly as before. Its integer share of each call is then apportioned among its files by their token weights. The file spans stay contiguous inside the group's span, so cache-read and cache-write pricing also adds up. Billed tokens of the files sum exactly to the old group leaf in every (range, model, role) cell. Unique tokens and dollars are rounded per leaf, so their sums can differ by rounding.
+- The group is first allocated as one path, exactly as before. Its integer share of each call is then apportioned among its files by their token weights. The file spans stay contiguous inside the group's span, so cache-read and cache-write pricing also adds up. Billed tokens of the files sum exactly to the old group leaf in every (day, model, role) cell. Unique tokens and dollars are rounded per leaf, so their sums can differ by rounding.
 - File sizes come from the content logged when the file was injected, not from disk. A file edited during the window is counted at the size of each version when it was sent, so no extra estimate is needed. The basis stays `estimated (chars/token)`.
 - Codex sends `~/.codex/AGENTS.md`, then `--- project-doc ---`, then the project docs. The text before the separator goes to `~/.codex/AGENTS.md`, the rest to the project file named in the header.
 - Labels: a file in a git checkout shows as `<repo>/<path in repo>`. A worktree takes its main repository's name from its `.git` file, and an in-repo `.worktrees/<name>/` or `worktrees/<name>/` directory is dropped, so one file aggregates across worktrees. A deleted `~/.t3/worktrees/<project>/<name>/` worktree takes the repository name of a live sibling, else `<project>`. A relative `gitdir:` is resolved against the checkout, and paths with spaces are kept whole. Other files under a home directory show as `~/<path>`. So does a plain git repository in a hidden home directory, such as `~/.codex/memories`, but a worktree there keeps its repo label. Anything else shows as `…/<parent>/<name>`. Home paths of any user, Windows drive and UNC paths included, and `-Users-<name>` project slugs are replaced with `~`. A Windows path outside a home directory shows as `…/<parent>/<name>`.
@@ -95,7 +111,7 @@ The explicit-read leaves carry `xf` (the file label) in the JSON, and file nodes
 
 ### Shell commands
 
-The built-in shell tools (Claude `Bash`, Codex `exec` and `exec_command`, and `shell`, `shell_command` and `local_shell`) have one child per command, under both **Tool calls** and **Tool results**. Each tool call carries a command label, and the tool's share is apportioned among its labels the same way as instruction files. So billed tokens of the commands sum exactly to the tool, per (range, model, role) cell.
+The built-in shell tools (Claude `Bash`, Codex `exec` and `exec_command`, and `shell`, `shell_command` and `local_shell`) have one child per command, under both **Tool calls** and **Tool results**. Each tool call carries a command label, and the tool's share is apportioned among its labels the same way as instruction files. So billed tokens of the commands sum exactly to the tool, per (day, model, role) cell.
 
 - The label is the program's basename plus, for multi-command tools such as `git`, `gh`, `pnpm`, `docker` and `kubectl`, the first bare word after the options: `git status`, `pnpm test`. For `python -m` the module is the subcommand, and `python -c` shows as `python3 -c`.
 - A command line is split on `;`, `&&`, `||`, `|`, `&` and newlines. The first command that is not setup labels the line. Setup commands are `cd`, `export`, `source`, `set`, `test` and similar, and variable assignments. Wrappers such as `sudo`, `env`, `timeout`, `nohup`, `time` and `xargs` are skipped, and `bash -c "…"` uses the inner command. Each wrapper's options come from `WRAPPER_OPT_WITH_ARG` and `WRAPPER_OPT_FLAGS`, so an option's value is never taken as the program: `exec -a git python -V` shows as `python` and `xargs -a git echo hi` as `echo`. A wrapper option on neither list makes the command **Unparsed**, because its value could be the program. Here-document bodies, `NAME=( … )` array elements, `case` patterns and `(( … ))` arithmetic, including the header of `for (( … ))`, are skipped, so a loop is labelled by its body. A call to a shell function defined on the same line takes the label of the function body.
@@ -144,7 +160,7 @@ An occurrence is one item entering the context:
 
 The bin is the item's own size: its estimate before any scaling for blocks and prefix sections, its share of the measured output for output, and the residual for Unattributed prefix. Every later call that re-reads the item adds its billed tokens to that same bin but adds no occurrence. So a 400-token `cat` result read on three calls is one occurrence with 1,200 billed tokens in the 200–500 bin. A bin can therefore have tokens but no occurrences in a short period, when the item first arrived in an earlier period. Unique tokens and dollars follow the same bins.
 
-Per leaf and (range, model, role) cell, the bins in `h` add up to the cell: billed tokens exactly, and unique tokens and dollars after the same largest-remainder rounding as the cell. A non-leaf node sums its leaves. `meta.size_bin_fallbacks` counts call spans whose tokens could not be traced to an item and were binned by the span's own size. The bins increase the JSON size.
+Per leaf and (day, model, role) cell, the bins in `h` add up to the cell: billed tokens exactly, and unique tokens and dollars after the same largest-remainder rounding as the cell. A non-leaf node sums its leaves. `meta.size_bin_fallbacks` counts call spans whose tokens could not be traced to an item and were binned by the span's own size. The bins increase the JSON size.
 
 ### Calibration
 
@@ -165,7 +181,7 @@ The chars/token ratio is fitted separately per source. For consecutive calls wit
 - Character-based estimates can exceed the measured context, so the prefix is scaled down. Tool schemas and system text may tokenize differently from tool results, and some context (such as Codex tool schemas) is not in the logs.
 - Codex tool schemas and some harness context are not logged, so they show up as Unattributed prefix.
 - These Claude attachment types have no rendered text and are counted, not attributed: deferred tool records, hook results, credential notices, permissions, and similar (`counts.claude_unrendered_attachments`).
-- Unknown models get their own labels and cost $0. They are listed in `meta.unpriced_models`, with call counts for the longest range in `meta.unpriced_calls_30d`. The dashboard shows `meta.coverageNote` under the legend. The note always cites the pricing sources. When there are unpriced calls, it adds a sentence such as "12 calls on unpriced models (counted as $0): …".
+- Unknown models get their own labels and cost $0. They are listed in `meta.unpriced_models`, with call counts for all collected days in `meta.unpriced_calls`. The dashboard shows `meta.coverageNote` under the legend. The note always cites the pricing sources. When there are unpriced calls, it adds a sentence such as "12 calls on unpriced models (counted as $0): …".
 - A Codex file's final `token_count` total can differ from the sum of its `token_usage_record` lines. The collector uses the records. Usage that appears only in `token_count` is not counted for that file.
 
 ## Privacy

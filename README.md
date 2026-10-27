@@ -1,6 +1,6 @@
 # Token dashboard
 
-A local dashboard of Claude Code and Codex token use and API-rate cost over the last 30 days. `token-analysis` reads the session logs on this Mac, shows its progress in the terminal, writes a drill-down stacked-bar chart, and opens it in your default browser. The outputs hold aggregate numbers and labels only, never message text or file contents.
+A local dashboard of Claude Code and Codex token use and API-rate cost over all the history in your session logs. `token-analysis` reads the session logs on this Mac, shows its progress in the terminal, writes a drill-down stacked-bar chart, and opens it in your default browser. The outputs hold aggregate numbers and labels only, never message text or file contents.
 
 ## Quick start
 
@@ -42,7 +42,7 @@ Every pull request runs `.github/workflows/ci.yml`, which runs the tests. Every 
 | `--no-browser` | off | Collect and print the dashboard path, but do not open the browser. |
 | `--version` | | Print the version and exit. |
 
-Other flags go to the collector, for example `--lookback 7`, `--top-files 20`, or `--end 2026-10-20T12:00:00+02:00`. Use `python3 -I collector/collect.py --help` for the full list. `--out`, `--html`, and `--template` are not accepted, because `token-analysis` sets them; use `--out-dir` to choose where the files go.
+Other flags go to the collector, for example `--lookback 90` to read only the last 90 days, `--top-files 20`, or `--end 2026-10-20T12:00:00+02:00`. Use `python3 -I collector/collect.py --help` for the full list. `--out`, `--html`, and `--template` are not accepted, because `token-analysis` sets them; use `--out-dir` to choose where the files go.
 
 If collection fails, `token-analysis` exits with a nonzero status and does not open the browser.
 
@@ -62,7 +62,8 @@ python3 -I collector/collect.py --out token-data.json --html token-drilldown.htm
 
 ## Dashboard
 
-- **Models**: each model with usage has a checkbox with its tokens and cost for the current range, metric and role. **All** and **None** select every model or no model. **Claude** and **GPT** select only that class. Shift-click **Claude** or **GPT** to add or remove that class and keep the rest of the selection. Every number in the chart, the drill-down levels and the legend is computed from the selected models only. With no model selected, the chart shows a message instead of bars. The browser remembers the excluded models in `localStorage` (`tkd.models`).
+- **Period**: the timeline below the role and metric controls has two handles that set the first and last local day counted. A handle at the left or right end means no limit on that side. **Today**, **7 days** and **30 days** move the handles; the button stays pressed only while the handles match it. The page opens on **30 days**. Every number updates as a handle moves, with no reload. The handles work with a pointer, touch, the arrow keys, Page Up/Down, Home and End.
+- **Models**: each model with usage has a checkbox with its tokens and cost for the current period, metric and role. **All** and **None** select every model or no model. **Claude** and **GPT** select only that class. Shift-click **Claude** or **GPT** to add or remove that class and keep the rest of the selection. Every number in the chart, the drill-down levels and the legend is computed from the selected models only. With no model selected, the chart shows a message instead of bars. The browser remembers the excluded models in `localStorage` (`tkd.models`).
 - **Shell commands**: under **Tool calls** or **Tool results** → **Built-in tools**, the `Bash` and `exec` nodes break down by command, such as `git status`, `cat` or `rg`. Labels come only from fixed allowlists of programs and subcommands, so they never contain arguments, paths or the names of your own scripts. Programs that are not on the list are grouped as **Other commands**. A Codex `exec` script with no shell command shows its first MCP or built-in tool call instead, such as **MCP: t3_code**, **MCP (other)**, `write_stdin` or **Tool discovery**, using fixed server, app and tool lists only. See `collector/README.md` for the rules.
 - **Instruction files**: each CLAUDE.md, AGENTS.md or rules file splits by how it entered the context: autoloaded at session start, reloaded after compaction, loaded on path match, or @-imported. When the model reads such a file itself with Read, `cat` or `sed`, those tokens stay under **Tool results**, and the detail panel links the two places. See `collector/README.md` for the rules.
 
