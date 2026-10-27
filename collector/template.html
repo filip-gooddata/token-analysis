@@ -6,6 +6,7 @@
 <title>Token usage drill-down</title>
 <style>
 html, body { margin: 0; padding: 0; }
+html { scrollbar-gutter: stable; }
 body { padding: 24px 32px; }
 @media (max-width: 600px) { body { padding: 16px 12px; } }
 .tkd {
@@ -18,7 +19,7 @@ body { padding: 24px 32px; }
   --rad: var(--radius, 8px);
   --c1: #2a78d6; --c2: #eb6834; --c3: #1baf7a; --c4: #eda100; --c5: #e87ba4; --c6: #8a63d2;
   --other: color-mix(in srgb, var(--fg) 30%, transparent);
-  max-width: 1080px;
+  max-width: max(1080px, calc(var(--chart-w, 0px) + 428px));
   margin-inline: auto;
   position: relative; color: var(--fg);
   font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
@@ -45,7 +46,7 @@ body { padding: 24px 32px; }
 .tkd .sample { margin-left: auto; font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--fg2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; }
 .tkd .hint { font-size: 12px; color: var(--fg2); margin: 0 0 10px; }
 .tkd #coverage { margin: 12px 0 0; }
-.tkd .wrap { overflow-x: auto; padding-bottom: 6px; }
+.tkd .wrap { padding-bottom: 6px; }
 .tkd svg { display: block; overflow: visible; }
 .tkd .seg-r { cursor: default; transition: opacity .15s; }
 .tkd .seg-r.drill { cursor: pointer; }
@@ -98,13 +99,10 @@ body { padding: 24px 32px; }
 .tkd .mi .pp { color: var(--fg2); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tkd .mi.off .lb, .tkd .mi.off .vv { color: var(--fg2); font-weight: 400; }
 .tkd .empty { fill: var(--fg2); font-size: 14px; }
-.tkd .main { display: grid; grid-template-columns: minmax(0, max-content) minmax(300px, 1fr); gap: 16px 28px; align-items: start; }
-.tkd .chartcol { min-width: 0; }
-.tkd .detail { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; border: 1px solid var(--line); border-radius: var(--rad); background: var(--surface); padding: 12px 14px; min-width: 0; container-type: inline-size; }
-@media (max-width: 860px) {
-  .tkd .main { grid-template-columns: minmax(0, 1fr); }
-  .tkd .detail { position: static; max-height: none; }
-}
+.tkd .main { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: flex-start; }
+.tkd .chartcol { flex: none; max-width: 100%; }
+.tkd .detail { flex: 1 1 320px; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; border: 1px solid var(--line); border-radius: var(--rad); background: var(--surface); padding: 12px 14px; min-width: 0; container-type: inline-size; }
+.tkd .main.stacked .detail { position: static; max-height: none; }
 .tkd .detail h2 { font-size: 16px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
 .tkd .detail .dpath { font-size: 12px; color: var(--fg2); margin: 2px 0 10px; overflow-wrap: anywhere; }
 .tkd .detail .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 6px 12px; margin-bottom: 14px; }
@@ -183,6 +181,23 @@ const METRICS = [{ id: 'billed', label: 'Billed tokens' }, { id: 'unique', label
 const COLORS = [1, 2, 3, 4, 5, 6].map(i => `var(--c${i})`);
 const INK = ['#fff', '#111', '#111', '#111', '#111', '#fff'];
 const ROOT = { id: 'root', label: 'All tokens', children: DATA.tree };
+// the chart keeps room for the deepest drill-down in the data, so opening or filtering bars never resizes it
+const depth = n => n.children ? 1 + n.children.reduce((a, c) => Math.max(a, depth(c)), 0) : 0;
+const NCOLS = depth(ROOT), COLW = 120, GAP = 52, DETAIL_MIN = 320, MAIN_GAP = 28;
+const FULL_W = NCOLS * COLW + (NCOLS - 1) * GAP;
+document.querySelector('.tkd').style.setProperty('--chart-w', FULL_W + 'px');
+// the details stay beside the chart if that only narrows it a little; otherwise they move below it
+// and a chart still too wide tightens its gaps, then its bars, then scales the whole drawing down
+function chartGeom() {
+  const main = document.querySelector('.tkd .main'), avail = main.clientWidth, side = avail - MAIN_GAP - DETAIL_MIN;
+  const fit = Math.min(FULL_W, side >= FULL_W * .85 ? side : avail);
+  main.classList.toggle('stacked', fit > side);
+  if (FULL_W <= fit) return { colw: COLW, gap: GAP, w: FULL_W, scale: 1 };
+  const gap = Math.max(12, GAP * fit / FULL_W);
+  const colw = Math.max(64, (fit - (NCOLS - 1) * gap) / NCOLS);
+  const w = NCOLS * colw + (NCOLS - 1) * gap;
+  return { colw, gap, w, scale: Math.min(1, fit / w) };
+}
 const ROLE_IDS = DATA.roles.map(r => r.id), MODEL_IDS = DATA.models.map(m => m.id);
 const MODEL_STORE = 'tkd.models';  // excluded model ids, so models that appear later start selected
 const loadModels = () => {
@@ -400,23 +415,24 @@ function render() {
     fkeep.push(c.id); n = c;
   }
   state.focus = fkeep;
-  if (!(rootV > 0)) return renderEmpty(state.models.size ? 'No usage for the selected models in this period and role.' : 'No models selected. Pick at least one model above.');
-  const H = 400, TOP = 46, COLW = 120, GAP = 52;
+  const geo = chartGeom();
+  $('wrap').parentElement.style.width = geo.w * geo.scale + 'px';
+  if (!(rootV > 0)) return renderEmpty(geo, state.models.size ? 'No usage for the selected models in this period and role.' : 'No models selected. Pick at least one model above.');
+  const H = 400, TOP = 46, { colw: COLW, gap: GAP, w: W, scale } = geo;
   const last = cols[cols.length - 1];
   const ghost = last.children.some(c => c.children);
-  const nCols = cols.length + (ghost ? 1 : 0);
-  const W = nCols * COLW + (nCols - 1) * GAP;
   const svg = $('chart');
   svg.replaceChildren();
-  svg.setAttribute('width', W); svg.setAttribute('height', TOP + H);
+  svg.setAttribute('width', W * scale); svg.setAttribute('height', (TOP + H) * scale);
   svg.setAttribute('viewBox', `0 0 ${W} ${TOP + H}`);
   const kidsOf = node => node.children.map((c, i) => ({ node: c, idx: i, v: vals.get(c.id) }))
     .filter(k => k.v[m] > 0).sort((a, b) => b.v[m] - a.v[m]);
+  const lpx = COLW < 100 ? 7.2 : 6.3;
   let pending = null;
   cols.forEach((node, level) => {
     const x = level * (COLW + GAP), total = vals.get(node.id)[m];
-    svg.append(sv('text', { x, y: 14, class: 'hd' }, clip(node.label, COLW + GAP - 10, 6.4)));
-    svg.append(sv('text', { x, y: 34, class: 'hv' }, fmt(total, m) + (level ? `  ·  ${pct(total / rootV)}` : '')));
+    svg.append(sv('text', { x, y: 14, class: 'hd' }, clip(node.label, Math.min(COLW + GAP, W - x) - 10, 6.4)));
+    svg.append(sv('text', { x, y: 34, class: 'hv' }, fmt(total, m) + (level && COLW + GAP >= 130 ? `  ·  ${pct(total / rootV)}` : '')));
     if (pending) {
       const { y0, y1, color } = pending, x1 = x - GAP, xm = x - GAP / 2;
       svg.append(sv('path', { d: `M${x1},${y0} C${xm},${y0} ${xm},${TOP} ${x},${TOP} L${x},${TOP + H} C${xm},${TOP + H} ${xm},${y1} ${x1},${y1} Z`, fill: color, 'fill-opacity': .18 }));
@@ -442,10 +458,11 @@ function render() {
       svg.append(r);
       const op = pick && !isSel ? .6 : 1;
       if (h >= 34) {
-        svg.append(sv('text', { x: x + 7, y: y + 15, class: 'sl', fill: ink, opacity: op }, clip(k.node.label + (drill ? ' ›' : ''), COLW - 12, 6.3)));
-        svg.append(sv('text', { x: x + 7, y: y + 28, class: 'sv', fill: ink, opacity: op }, `${fmt(k.v[m], m)} · ${pct(k.v[m] / total)}`));
+        svg.append(sv('text', { x: x + 7, y: y + 15, class: 'sl', fill: ink, opacity: op }, clip(k.node.label + (drill ? ' ›' : ''), COLW - 12, lpx)));
+        const vt = `${fmt(k.v[m], m)} · ${pct(k.v[m] / total)}`;
+        svg.append(sv('text', { x: x + 7, y: y + 28, class: 'sv', fill: ink, opacity: op }, vt.length * 6.4 > COLW - 12 ? fmt(k.v[m], m) : vt));
       } else if (h >= 16) {
-        svg.append(sv('text', { x: x + 7, y: y + h / 2 + 4, class: 'sl', fill: ink, opacity: op }, clip(k.node.label, COLW - 12, 6.3)));
+        svg.append(sv('text', { x: x + 7, y: y + h / 2 + 4, class: 'sl', fill: ink, opacity: op }, clip(k.node.label, COLW - 12, lpx)));
       }
       if (selId === k.node.id) pending = { y0: y, y1: y + h, color };
       y += h;
@@ -454,11 +471,9 @@ function render() {
   if (ghost) {
     const x = cols.length * (COLW + GAP);
     svg.append(sv('rect', { x: x + .5, y: TOP + .5, width: COLW - 1, height: H - 1, rx: 4, class: 'ghost' }));
-    ['Click a segment', 'marked › to', 'break it down'].forEach((t, i) =>
+    (COLW >= 100 ? ['Click a segment', 'marked › to', 'break it down'] : ['Click ›', 'to break', 'it down']).forEach((t, i) =>
       svg.append(sv('text', { x: x + COLW / 2, y: TOP + H / 2 - 14 + i * 16, class: 'gt', 'text-anchor': 'middle' }, t)));
   }
-  const wrap = $('wrap');
-  wrap.scrollLeft = wrap.scrollWidth;
   renderDetail(vals);
 }
 const EDGES = DATA.meta.size_bin_edges || [];
@@ -630,13 +645,20 @@ function renderDetail(vals) {
   secH.append(hs);
   secH.append(el('p', 'note', 'Each block, tool call, tool result or output counts once, in the bin of its own size; every later re-read adds its tokens to that same bin. Prefix sections count once per snapshot.'));
 }
-function renderEmpty(msg) {
-  const svg = $('chart'), W = 420, H = 120;
+function renderEmpty(geo, msg) {
+  const svg = $('chart'), W = geo.w * geo.scale, n = Math.max(1, Math.floor((W - 24) / 7.6)), lines = [];
+  for (const word of msg.split(' ')) {
+    if (lines.length && (lines[lines.length - 1] + ' ' + word).length <= n) lines[lines.length - 1] += ' ' + word;
+    else lines.push(word);
+  }
+  const H = Math.max(120, lines.length * 20 + 40);
   svg.replaceChildren();
   svg.setAttribute('width', W); svg.setAttribute('height', H);
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.append(sv('rect', { x: .5, y: .5, width: W - 1, height: H - 1, rx: 6, class: 'ghost' }));
-  svg.append(sv('text', { x: W / 2, y: H / 2 + 5, class: 'empty', 'text-anchor': 'middle', id: 'empty-msg' }, msg));
+  const t = sv('text', { x: W / 2, y: H / 2 + 5 - (lines.length - 1) * 10, class: 'empty', 'text-anchor': 'middle', id: 'empty-msg' });
+  lines.forEach((l, i) => t.append(sv('tspan', { x: W / 2, dy: i ? 20 : 0 }, l)));
+  svg.append(t);
   $('detail').replaceChildren(el('p', 'note', msg));
 }
 $('src-pill').textContent = DATA.meta.pill;
