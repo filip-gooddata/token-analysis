@@ -69,17 +69,18 @@ body { padding: 24px 32px; }
 .tkd .timeline { border: 1px solid var(--line); border-radius: var(--rad); padding: 8px 10px 6px; margin-bottom: 12px; }
 .tkd .thead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 4px; }
 .tkd .thead .t { font-size: 12px; font-weight: 600; color: var(--fg2); }
-.tkd .thead .tl { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
-.tkd .thead .tn { font-size: 12px; color: var(--fg2); white-space: nowrap; }
-.tkd .track { --th: 18px; position: relative; height: 30px; touch-action: none; }
+.tkd .thead .tl { flex: 0 1 17em; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
+.tkd .thead .tn { flex: 0 0 10em; font-size: 12px; color: var(--fg2); white-space: nowrap; }
+.tkd .track { --th: 18px; position: relative; height: 30px; touch-action: none; cursor: pointer; }
 .tkd .track .rail, .tkd .track .fill { position: absolute; top: 13px; height: 4px; border-radius: 2px; pointer-events: none; }
 .tkd .track .rail { left: calc(var(--th) / 2); right: calc(var(--th) / 2); background: var(--wash); }
 .tkd .track .fill { background: var(--c1); }
 .tkd .track input { position: absolute; inset: 0; width: 100%; height: 30px; margin: 0; background: none; pointer-events: none; -webkit-appearance: none; appearance: none; }
 .tkd .track input::-webkit-slider-runnable-track { background: none; height: 30px; }
 .tkd .track input::-moz-range-track { background: none; }
-.tkd .track input::-webkit-slider-thumb { -webkit-appearance: none; pointer-events: auto; width: var(--th); height: var(--th); margin-top: 6px; border-radius: 50%; background: var(--surface); border: 2px solid var(--c1); cursor: grab; }
-.tkd .track input::-moz-range-thumb { pointer-events: auto; width: 14px; height: 14px; border-radius: 50%; background: var(--surface); border: 2px solid var(--c1); cursor: grab; }
+.tkd .track input::-webkit-slider-thumb { -webkit-appearance: none; width: var(--th); height: var(--th); margin-top: 6px; border-radius: 50%; background: var(--surface); border: 2px solid var(--c1); cursor: grab; }
+.tkd .track input::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--surface); border: 2px solid var(--c1); cursor: grab; }
+.tkd .track input:focus { z-index: 1; }
 .tkd .track input:focus-visible { outline: none; }
 .tkd .track input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c1) 35%, transparent); }
 .tkd .track input:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c1) 35%, transparent); }
@@ -650,8 +651,6 @@ function paintPeriod() {
   const a = state.from > 0 ? dayLabel(state.from) : 'No start limit', b = state.to < LAST ? dayLabel(state.to) : 'No end limit';
   fromIn.setAttribute('aria-valuetext', state.from > 0 ? `From ${dayLabel(state.from)}` : `No start limit (data from ${dayLabel(0)})`);
   toIn.setAttribute('aria-valuetext', state.to < LAST ? `Through ${dayLabel(state.to)}` : `No end limit (through ${dayLabel(LAST)})`);
-  fromIn.style.zIndex = state.from > LAST / 2 ? 3 : 1;
-  toIn.style.zIndex = 2;
   $('t-label').textContent = state.from === state.to && state.to < LAST && state.from > 0 ? a : `${a} – ${b}`;
   const n = state.to - state.from + 1;
   $('t-days').textContent = state.from > 0 || state.to < LAST ? (n === 1 ? '1 day' : `${n} days`) : 'all collected history';
@@ -672,6 +671,65 @@ for (const inp of [fromIn, toIn]) {
     else setPeriod(state.from, Math.max(v, state.from));
   });
 }
+// The track handles pointers itself: a handle drags across the other one and becomes the opposite bound,
+// the fill between the handles moves the whole period, and the bare track pulls the nearest handle to the pointer.
+const track = $('t-track');
+let drag = null;
+function trackAt() {
+  const r = track.getBoundingClientRect(), th = parseFloat(getComputedStyle(track).getPropertyValue('--th')) || 18;
+  const w = Math.max(1, r.width - th), left = r.left + th / 2;
+  return { th, pos: x => LAST ? Math.min(LAST, Math.max(0, (x - left) / w * LAST)) : 0, x: d => left + w * (LAST ? d / LAST : 0) };
+}
+function hitAt(t, x, touch) {
+  const reach = t.th / 2 + (touch ? 10 : 3);
+  const df = Math.abs(x - t.x(state.from)), dt = Math.abs(x - t.x(state.to));
+  if (Math.min(df, dt) <= reach) return state.from === state.to ? 'both' : df < dt ? 'from' : 'to';
+  const p = t.pos(x);
+  return p < state.from ? 'from-track' : p > state.to ? 'to-track' : 'band';
+}
+function moveBound(d) {
+  if (d !== drag.fixed) (d < drag.fixed ? fromIn : toIn).focus({ preventScroll: true });
+  setPeriod(Math.min(d, drag.fixed), Math.max(d, drag.fixed));
+}
+track.addEventListener('pointerdown', e => {
+  if (drag || !e.isPrimary || e.button !== 0) return;
+  e.preventDefault();
+  const t = trackAt(), hit = hitAt(t, e.clientX, e.pointerType !== 'mouse');
+  drag = { id: e.pointerId, x0: e.clientX, dx: 0 };
+  if (hit === 'band') drag.offset = t.pos(e.clientX) - state.from;
+  else if (hit === 'both') drag.dxs = [e.clientX - t.x(state.from), e.clientX - t.x(state.to)];
+  else {
+    drag.fixed = hit.startsWith('from') ? state.to : state.from;
+    if (hit.endsWith('track')) moveBound(Math.round(t.pos(e.clientX)));
+    else {
+      drag.dx = e.clientX - t.x(hit === 'from' ? state.from : state.to);
+      (hit === 'from' ? fromIn : toIn).focus({ preventScroll: true });
+    }
+  }
+  track.setPointerCapture(e.pointerId);
+  track.style.cursor = 'grabbing';
+});
+track.addEventListener('pointermove', e => {
+  const t = trackAt();
+  if (!drag) { track.style.cursor = hitAt(t, e.clientX, e.pointerType !== 'mouse').endsWith('track') ? '' : 'grab'; return; }
+  if (e.pointerId !== drag.id) return;
+  if (drag.offset != null) {
+    const span = state.to - state.from, from = Math.min(LAST - span, Math.max(0, Math.round(t.pos(e.clientX) - drag.offset)));
+    return setPeriod(from, from + span);
+  }
+  if (drag.fixed == null) {
+    if (Math.abs(e.clientX - drag.x0) < 2) return;
+    const left = e.clientX < drag.x0;
+    drag.fixed = left ? state.to : state.from;
+    drag.dx = drag.dxs[left ? 0 : 1];
+  }
+  moveBound(Math.round(t.pos(e.clientX - drag.dx)));
+});
+for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) track.addEventListener(type, e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  drag = null;
+  track.style.cursor = '';
+});
 $('t-first').textContent = dayLabel(0);
 $('t-last').textContent = dayLabel(LAST);
 paintPeriod();
