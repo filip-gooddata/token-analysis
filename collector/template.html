@@ -18,7 +18,7 @@ body { padding: 24px 32px; }
   --rad: var(--radius, 8px);
   --c1: #2a78d6; --c2: #eb6834; --c3: #1baf7a; --c4: #eda100; --c5: #e87ba4; --c6: #8a63d2;
   --other: color-mix(in srgb, var(--fg) 30%, transparent);
-  max-width: 1440px;
+  max-width: 1080px;
   margin-inline: auto;
   position: relative; color: var(--fg);
   font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
@@ -44,6 +44,7 @@ body { padding: 24px 32px; }
 .tkd select { font: inherit; font-size: 13px; color: var(--fg); background: var(--wash); border: 0; border-radius: var(--rad); padding: 5px 8px; cursor: pointer; }
 .tkd .sample { margin-left: auto; font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--fg2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; }
 .tkd .hint { font-size: 12px; color: var(--fg2); margin: 0 0 10px; }
+.tkd #coverage { margin: 12px 0 0; }
 .tkd .wrap { overflow-x: auto; padding-bottom: 6px; }
 .tkd svg { display: block; overflow: visible; }
 .tkd .seg-r { cursor: default; transition: opacity .15s; }
@@ -69,31 +70,36 @@ body { padding: 24px 32px; }
 .tkd .mhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 6px; }
 .tkd .mhead .t { font-size: 12px; font-weight: 600; color: var(--fg2); }
 .tkd .mhead .hint { margin: 0; }
-.tkd .mlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 2px 16px; }
+.tkd .mlist { display: flex; flex-wrap: wrap; gap: 2px 18px; }
 .tkd .mi { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 6px; font-size: 13px; cursor: pointer; min-width: 0; }
 .tkd .mi:hover { background: var(--hover); }
 .tkd .mi input { margin: 0; flex: none; }
-.tkd .mi .lb { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tkd .mi .lb { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tkd .mi .vv { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tkd .mi .pp { color: var(--fg2); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tkd .mi.off .lb, .tkd .mi.off .vv { color: var(--fg2); font-weight: 400; }
 .tkd .empty { fill: var(--fg2); font-size: 14px; }
 .tkd .main { display: grid; grid-template-columns: minmax(0, max-content) minmax(300px, 1fr); gap: 16px 28px; align-items: start; }
 .tkd .chartcol { min-width: 0; }
-.tkd .detail { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; border: 1px solid var(--line); border-radius: var(--rad); background: var(--surface); padding: 12px 14px; min-width: 0; }
+.tkd .detail { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; border: 1px solid var(--line); border-radius: var(--rad); background: var(--surface); padding: 12px 14px; min-width: 0; container-type: inline-size; }
 @media (max-width: 860px) {
   .tkd .main { grid-template-columns: minmax(0, 1fr); }
   .tkd .detail { position: static; max-height: none; }
 }
 .tkd .detail h2 { font-size: 16px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
 .tkd .detail .dpath { font-size: 12px; color: var(--fg2); margin: 2px 0 10px; overflow-wrap: anywhere; }
-.tkd .detail .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px 12px; margin-bottom: 14px; }
+.tkd .detail .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 6px 12px; margin-bottom: 14px; }
 .tkd .detail .st .k { font-size: 11px; color: var(--fg2); }
 .tkd .detail .st .x { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .tkd .detail h3 { font-size: 12px; font-weight: 600; color: var(--fg2); margin: 12px 0 6px; }
 .tkd .detail .donut { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
-.tkd .detail .donut .legend { flex: 1 1 170px; display: block; margin: 0; }
-.tkd .detail .donut .li { padding: 2px 4px; }
+.tkd .detail .donut .legend { flex: 0 1 auto; min-width: 0; display: grid; grid-template-columns: 10px minmax(0, max-content) max-content max-content; gap: 5px 8px; align-items: center; margin: 0; }
+.tkd .detail .dbody { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 28px; }
+.tkd .detail .dbody > section { min-width: 0; }
+@container (min-width: 720px) { .tkd .detail .dbody { grid-template-columns: minmax(0, max-content) minmax(300px, 1fr); } }
+.tkd #hist { max-width: 100%; height: auto; }
+.tkd .detail .donut .li { display: contents; }
+.tkd .detail .donut .li .pp { margin-right: 14px; }
 .tkd .detail .note { font-size: 12px; color: var(--fg2); margin: 6px 0 0; }
 .tkd .detail .xref { font-size: 13px; margin: -6px 0 12px; padding: 6px 8px; border: 1px solid var(--line); border-radius: calc(var(--rad) - 2px); }
 .tkd .detail .xref button { border: 0; background: transparent; padding: 0; color: var(--fg); text-decoration: underline; cursor: pointer; }
@@ -118,9 +124,9 @@ body { padding: 24px 32px; }
   <div class="controls">
     <div class="seg" id="f-range" aria-label="Time range"></div>
     <select id="f-role" aria-label="Agent role"></select>
+    <div class="seg" id="f-metric" aria-label="Metric"></div>
     <span class="sample" id="src-pill"></span>
   </div>
-  <div class="controls"><div class="seg" id="f-metric" aria-label="Metric"></div></div>
   <div class="models" id="f-models" role="group" aria-label="Models">
     <div class="mhead">
       <span class="t">Models</span>
@@ -133,10 +139,10 @@ body { padding: 24px 32px; }
   <div class="main">
     <div class="chartcol">
       <div class="wrap" id="wrap"><svg id="chart" role="img" aria-label="Drill-down stacked bars"></svg></div>
-      <p class="hint" id="coverage" hidden></p>
     </div>
     <aside class="detail" id="detail" aria-live="polite" aria-label="Selected segment details"></aside>
   </div>
+  <p class="hint" id="coverage" hidden></p>
   <div class="tip" id="tip" role="tooltip"></div>
 </div>
 <script>
@@ -506,8 +512,12 @@ function renderDetail(vals) {
     box.append(p);
   }
 
+  // by-model and size sections sit side by side when the panel is wide enough
+  const body = el('div', 'dbody'), secM = el('section'), secH = el('section');
+  body.append(secM, secH);
+  box.append(body);
   // donut: share of the metric by model
-  box.append(el('h3', null, `${METRICS.find(x => x.id === m).label} by model`));
+  secM.append(el('h3', null, `${METRICS.find(x => x.id === m).label} by model`));
   const rows = MODEL_IDS.map((id, mi) => ({ id, label: DATA.models[mi].label, x: Math.max(0, byModel[mi][m]) }))
     .filter(r => r.x > 0).sort((a, b) => b.x - a.x);
   const shown = rows.length > COLORS.length ? rows.slice(0, COLORS.length - 1) : rows;
@@ -539,13 +549,13 @@ function renderDetail(vals) {
   d.append(sv('text', { x: S / 2, y: S / 2 + 2, class: 'dc', 'text-anchor': 'middle' }, fmt(v[m], m)));
   d.append(sv('text', { x: S / 2, y: S / 2 + 16, class: 'dk', 'text-anchor': 'middle' }, rows.length === 1 ? '1 model' : `${rows.length} models`));
   dw.append(d, lg);
-  box.append(dw);
+  secM.append(dw);
 
   // histogram: occurrences and share of the metric by occurrence size
   const key = { billed: 'billed', unique: 'unique', usd: 'usd' }[m];
   const binTotal = bins.reduce((a, b) => a + Math.max(0, b[key]), 0);
-  box.append(el('h3', null, 'Size of each occurrence (estimated tokens)'));
-  const W = Math.max(240, Math.min(560, box.clientWidth - 30)), PL = 4, PH = 70, LBL = 14, GAPY = 26;
+  secH.append(el('h3', null, 'Size of each occurrence (estimated tokens)'));
+  const W = Math.max(240, secH.clientWidth), PL = 4, PH = 70, LBL = 14, GAPY = 26;
   const H = 12 + 2 * PH + GAPY + LBL + 4, bw = (W - PL) / NBINS;
   const hs = sv('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'group', 'aria-label': 'Occurrence size histogram', id: 'hist' });
   const maxN = Math.max(1, ...bins.map(b => b.n)), maxS = Math.max(1e-12, ...bins.map(b => binTotal ? Math.max(0, b[key]) / binTotal : 0));
@@ -582,8 +592,8 @@ function renderDetail(vals) {
     hs.append(sv('line', { x1: x, x2: x, y1: panels[1].y + PH, y2: panels[1].y + PH + 4, class: 'ax' }));
     hs.append(sv('text', { x, y: axisY, class: 'at', 'text-anchor': 'middle' }, tok(e)));
   });
-  box.append(hs);
-  box.append(el('p', 'note', 'Each block, tool call, tool result or output counts once, in the bin of its own size; every later re-read adds its tokens to that same bin. Prefix sections count once per snapshot.'));
+  secH.append(hs);
+  secH.append(el('p', 'note', 'Each block, tool call, tool result or output counts once, in the bin of its own size; every later re-read adds its tokens to that same bin. Prefix sections count once per snapshot.'));
 }
 function renderEmpty(msg) {
   const svg = $('chart'), W = 420, H = 120;
