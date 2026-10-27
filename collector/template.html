@@ -184,6 +184,7 @@ const ROOT = { id: 'root', label: 'All tokens', children: DATA.tree };
 // the chart keeps room for the deepest drill-down in the data, so opening or filtering bars never resizes it
 const depth = n => n.children ? 1 + n.children.reduce((a, c) => Math.max(a, depth(c)), 0) : 0;
 const NCOLS = depth(ROOT), COLW = 120, GAP = 52, DETAIL_MIN = 320, MAIN_GAP = 28;
+const BAR_H = 400, BAR_TOP = 46;
 const FULL_W = NCOLS * COLW + (NCOLS - 1) * GAP;
 document.querySelector('.tkd').style.setProperty('--chart-w', FULL_W + 'px');
 // the details stay beside the chart if that only narrows it a little; otherwise they move below it
@@ -418,7 +419,7 @@ function render() {
   const geo = chartGeom();
   $('wrap').parentElement.style.width = geo.w * geo.scale + 'px';
   if (!(rootV > 0)) return renderEmpty(geo, state.models.size ? 'No usage for the selected models in this period and role.' : 'No models selected. Pick at least one model above.');
-  const H = 400, TOP = 46, { colw: COLW, gap: GAP, w: W, scale } = geo;
+  const H = BAR_H, TOP = BAR_TOP, { colw: COLW, gap: GAP, w: W, scale } = geo;
   const last = cols[cols.length - 1];
   const ghost = last.children.some(c => c.children);
   const svg = $('chart');
@@ -651,7 +652,7 @@ function renderEmpty(geo, msg) {
     if (lines.length && (lines[lines.length - 1] + ' ' + word).length <= n) lines[lines.length - 1] += ' ' + word;
     else lines.push(word);
   }
-  const H = Math.max(120, lines.length * 20 + 40);
+  const H = (BAR_TOP + BAR_H) * geo.scale;
   svg.replaceChildren();
   svg.setAttribute('width', W); svg.setAttribute('height', H);
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
