@@ -1,0 +1,19 @@
+collector/template.html
+  s_68f3ac55e73d39::t_09c0777e354cfa 21,47,73,77,84,91,96-102,127,145,515-518,520,552,557-558,595-596
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eb8faaf457e655c865a415127c8998f9ae19983e",
+  "prompts": {},
+  "sessions": {
+    "s_68f3ac55e73d39": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17890-1ec5-7cd2-8a4f-448b52858211",
+        "model": "unknown"
+      },
+      "human_author": "Filip Kalný <filip.kalny@gooddata.com>"
+    }
+  }
+}
