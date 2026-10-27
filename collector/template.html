@@ -84,6 +84,8 @@ body { padding: 24px 32px; }
 .tkd .track input:focus-visible { outline: none; }
 .tkd .track input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c1) 35%, transparent); }
 .tkd .track input:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c1) 35%, transparent); }
+.tkd .track .when { position: absolute; bottom: calc(100% - 2px); left: 0; z-index: 2; pointer-events: none; white-space: nowrap; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12); }
+.tkd .track .when span { color: var(--fg2); font-weight: 400; }
 .tkd .tends { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--fg2); font-variant-numeric: tabular-nums; }
 .tkd .models { border: 1px solid var(--line); border-radius: var(--rad); padding: 8px 10px; margin-bottom: 12px; }
 .tkd .mhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 6px; }
@@ -156,6 +158,7 @@ body { padding: 24px 32px; }
       <div class="rail"></div><div class="fill" id="t-fill"></div>
       <input type="range" id="t-from" aria-label="Start of the period" min="0" step="1">
       <input type="range" id="t-to" aria-label="End of the period" min="0" step="1">
+      <div class="when" id="t-when" aria-hidden="true" hidden></div>
     </div>
     <div class="tends"><span id="t-first"></span><span id="t-last"></span></div>
   </div>
@@ -645,7 +648,20 @@ if (DATA.meta.coverageNote) { $('coverage').textContent = DATA.meta.coverageNote
 const dayOf = i => { const [y, m, d] = DATA.days.first.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + i)); };
 const YEARS = dayOf(0).getUTCFullYear() !== dayOf(LAST).getUTCFullYear();
 const dayLabel = i => dayOf(i).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: YEARS ? 'numeric' : undefined, timeZone: 'UTC' });
-const fromIn = $('t-from'), toIn = $('t-to');
+const whenFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
+const fromIn = $('t-from'), toIn = $('t-to'), when = $('t-when');
+let whenOf = null;
+function paintWhen() {
+  if (!whenOf) return void (when.hidden = true);
+  const d = whenOf === 'from' ? state.from : state.to, ends = whenOf === 'from' ? [d === 0] : [false, d === LAST];
+  if (state.from === state.to) ends.splice(0, 2, d === 0, d === LAST);
+  const limits = [ends[0] && 'No start limit', ends[1] && 'No end limit'].filter(Boolean).join(' · ');
+  when.replaceChildren(...(limits ? [el('span', null, limits), ' · '] : []), whenFmt.format(dayOf(d)));
+  when.hidden = false;
+  const r = track.getBoundingClientRect(), w = when.offsetWidth, vw = document.documentElement.clientWidth;
+  when.style.left = `${Math.max(4 - r.left, Math.min(vw - 4 - r.left - w, trackAt().x(d) - r.left - w / 2))}px`;
+}
+function showWhen(of) { whenOf = of; paintWhen(); }
 function paintPeriod() {
   fromIn.value = state.from; toIn.value = state.to;
   const a = state.from > 0 ? dayLabel(state.from) : 'No start limit', b = state.to < LAST ? dayLabel(state.to) : 'No end limit';
@@ -657,6 +673,7 @@ function paintPeriod() {
   const f = $('t-fill');
   f.style.left = `calc(var(--th) / 2 + (100% - var(--th)) * ${LAST ? state.from / LAST : 0})`;
   f.style.width = `calc((100% - var(--th)) * ${LAST ? (state.to - state.from) / LAST : 0})`;
+  paintWhen();
 }
 function setPeriod(from, to) {
   if (from === state.from && to === state.to) return paintPeriod();
@@ -670,6 +687,8 @@ for (const inp of [fromIn, toIn]) {
     if (inp === fromIn) setPeriod(Math.min(v, state.to), state.to);
     else setPeriod(state.from, Math.max(v, state.from));
   });
+  inp.addEventListener('keydown', () => { if (!drag) showWhen(inp === fromIn ? 'from' : 'to'); });
+  inp.addEventListener('blur', () => { if (!drag) showWhen(null); });
 }
 // The track handles pointers itself: a handle drags across the other one and becomes the opposite bound,
 // the fill between the handles moves the whole period, and the bare track pulls the nearest handle to the pointer.
@@ -680,6 +699,13 @@ function trackAt() {
   const w = Math.max(1, r.width - th), left = r.left + th / 2;
   return { th, pos: x => LAST ? Math.min(LAST, Math.max(0, (x - left) / w * LAST)) : 0, x: d => left + w * (LAST ? d / LAST : 0) };
 }
+function hoverAt(e) {
+  const r = track.getBoundingClientRect();
+  const inside = e.clientY >= r.top && e.clientY <= r.bottom && e.clientX >= r.left && e.clientX <= r.right;
+  const hit = inside ? hitAt(trackAt(), e.clientX, e.pointerType !== 'mouse') : '';
+  showWhen(e.pointerType === 'touch' || hit.endsWith('track') || hit === 'band' ? null : hit === 'both' ? 'to' : hit || null);
+  track.style.cursor = hit && !hit.endsWith('track') ? 'grab' : '';
+}
 function hitAt(t, x, touch) {
   const reach = t.th / 2 + (touch ? 10 : 3);
   const df = Math.abs(x - t.x(state.from)), dt = Math.abs(x - t.x(state.to));
@@ -688,6 +714,7 @@ function hitAt(t, x, touch) {
   return p < state.from ? 'from-track' : p > state.to ? 'to-track' : 'band';
 }
 function moveBound(d) {
+  whenOf = d < drag.fixed ? 'from' : 'to';
   if (d !== drag.fixed) (d < drag.fixed ? fromIn : toIn).focus({ preventScroll: true });
   setPeriod(Math.min(d, drag.fixed), Math.max(d, drag.fixed));
 }
@@ -696,12 +723,13 @@ track.addEventListener('pointerdown', e => {
   e.preventDefault();
   const t = trackAt(), hit = hitAt(t, e.clientX, e.pointerType !== 'mouse');
   drag = { id: e.pointerId, x0: e.clientX, dx: 0 };
-  if (hit === 'band') drag.offset = t.pos(e.clientX) - state.from;
-  else if (hit === 'both') drag.dxs = [e.clientX - t.x(state.from), e.clientX - t.x(state.to)];
+  if (hit === 'band') { drag.offset = t.pos(e.clientX) - state.from; showWhen(null); }
+  else if (hit === 'both') { drag.dxs = [e.clientX - t.x(state.from), e.clientX - t.x(state.to)]; showWhen('to'); }
   else {
     drag.fixed = hit.startsWith('from') ? state.to : state.from;
     if (hit.endsWith('track')) moveBound(Math.round(t.pos(e.clientX)));
     else {
+      showWhen(hit);
       drag.dx = e.clientX - t.x(hit === 'from' ? state.from : state.to);
       (hit === 'from' ? fromIn : toIn).focus({ preventScroll: true });
     }
@@ -710,8 +738,8 @@ track.addEventListener('pointerdown', e => {
   track.style.cursor = 'grabbing';
 });
 track.addEventListener('pointermove', e => {
+  if (!drag) return hoverAt(e);
   const t = trackAt();
-  if (!drag) { track.style.cursor = hitAt(t, e.clientX, e.pointerType !== 'mouse').endsWith('track') ? '' : 'grab'; return; }
   if (e.pointerId !== drag.id) return;
   if (drag.offset != null) {
     const span = state.to - state.from, from = Math.min(LAST - span, Math.max(0, Math.round(t.pos(e.clientX) - drag.offset)));
@@ -728,8 +756,10 @@ track.addEventListener('pointermove', e => {
 for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) track.addEventListener(type, e => {
   if (!drag || e.pointerId !== drag.id) return;
   drag = null;
-  track.style.cursor = '';
+  if (e.type === 'pointerup') hoverAt(e);
+  else { showWhen(null); track.style.cursor = ''; }
 });
+track.addEventListener('pointerleave', () => { if (!drag) showWhen(null); });
 $('t-first').textContent = dayLabel(0);
 $('t-last').textContent = dayLabel(LAST);
 paintPeriod();
@@ -740,7 +770,7 @@ let resizeQueued = false;
 window.addEventListener('resize', () => {
   if (resizeQueued) return;
   resizeQueued = true;
-  requestAnimationFrame(() => { resizeQueued = false; render(); });
+  requestAnimationFrame(() => { resizeQueued = false; render(); paintWhen(); });
 });
 </script>
 </body>
