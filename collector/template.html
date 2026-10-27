@@ -84,7 +84,7 @@ body { padding: 24px 32px; }
 .tkd .track input:focus-visible { outline: none; }
 .tkd .track input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c1) 35%, transparent); }
 .tkd .track input:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c1) 35%, transparent); }
-.tkd .track .when { position: absolute; bottom: calc(100% - 2px); left: 0; z-index: 2; pointer-events: none; white-space: nowrap; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12); }
+.tkd .track .when { position: absolute; bottom: calc(100% - 2px); left: 0; z-index: 2; pointer-events: none; width: max-content; max-width: calc(100vw - 8px); box-sizing: border-box; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12); }
 .tkd .track .when span { color: var(--fg2); font-weight: 400; }
 .tkd .tends { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--fg2); font-variant-numeric: tabular-nums; }
 .tkd .models { border: 1px solid var(--line); border-radius: var(--rad); padding: 8px 10px; margin-bottom: 12px; }
