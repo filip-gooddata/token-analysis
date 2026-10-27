@@ -1,0 +1,23 @@
+collector/README.md
+  s_6ea45583743207::t_e76ad16321356b 66,96-109
+collector/collect.py
+  s_6ea45583743207::t_b873d2659aedd7 98-100,104,111,117,119-123,127,1981-1990,1993,1996-2001,2008-2011,2013,2073,2076,2148-2153,2163-2165,2167-2169,2173,2180,2202,2283-2286,2471,2479
+collector/test_collect.py
+  s_6ea45583743207::t_40b7ffe4758f04 784,789,2369-2510
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3cc339286f6ba7391ad035b4b7128a2275170c70",
+  "prompts": {},
+  "sessions": {
+    "s_6ea45583743207": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "578e43d0-f736-4ef1-9f0c-74f81a86f492",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Filip Kalný <filip.kalny@gooddata.com>"
+    }
+  }
+}
