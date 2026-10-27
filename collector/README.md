@@ -79,7 +79,7 @@ Each leaf's tooltip shows its basis strings:
 
 ### Instruction files
 
-Each group under **Agent instructions → Instruction files** (Rules files, Project AGENTS.md, User CLAUDE.md, and the rest) and the Codex **AGENTS.md instructions** node has one child per file. A group with a single file keeps that file as its one child, so the filename stays visible. Codex sends AGENTS.md as a user message that starts with `# AGENTS.md instructions for <dir>` and ends at `</INSTRUCTIONS>`; that span goes to the AGENTS.md node, split into `~/.codex/AGENTS.md` and the project file at `--- project-doc ---`, and the rest of the message is classified as before. A developer message is treated the same way only when it starts with that wrapper. Developer text that merely mentions AGENTS.md, as Codex's own instructions do, stays under **Developer messages**. File provenance is inferred from the wrapper alone, so a pasted copy of the exact wrapper is counted as a file.
+Each group under **Agent instructions → Instruction files** (Rules files, Project AGENTS.md, User CLAUDE.md, and the rest) and the Codex **AGENTS.md instructions** node has one child per file. A group with a single file keeps that file as its one child, so the filename stays visible. Codex sends AGENTS.md as a user message that starts with `# AGENTS.md instructions for <dir>` and ends at `</INSTRUCTIONS>`; that span goes to the AGENTS.md node, split into `~/.codex/AGENTS.md` and the project file at `--- project-doc ---`, and the rest of the message is classified as before. A developer message is treated the same way only when it starts with that wrapper. Developer text that merely mentions AGENTS.md, as Codex's own instructions do, stays under **Developer-role instructions**. File provenance is inferred from the wrapper alone, so a pasted copy of the exact wrapper is counted as a file.
 
 - The group is first allocated as one path, exactly as before. Its integer share of each call is then apportioned among its files by their token weights. The file spans stay contiguous inside the group's span, so cache-read and cache-write pricing also adds up. Billed tokens of the files sum exactly to the old group leaf in every (day, model, role) cell. Unique tokens and dollars are rounded per leaf, so their sums can differ by rounding.
 - File sizes come from the content logged when the file was injected, not from disk. A file edited during the window is counted at the size of each version when it was sent, so no extra estimate is needed. The basis stays `estimated (chars/token)`.
@@ -108,6 +108,20 @@ A file the model reads itself is not an instruction-file load. Its tokens stay u
   - A Codex `exec` script counts only when the grammar under [Shell commands](#shell-commands) proves that its first call is `exec_command`, no other `exec_command` follows it, and the code after the call ends outside any string, template or comment. The call's `cmd` must be a string built only from literals and prefix bindings, and a `workdir`, if present, too. A runtime value in `cmd` (`"…" + name`) means the command does not count, and a runtime value anywhere else makes the script **Unparsed**. The command is then resolved against that directory. A shell argv such as `["bash", "-lc", "…"]` in the other shell tools uses the script as written.
 
 The explicit-read leaves carry `xf` (the file label) in the JSON, and file nodes carry `fl`. The detail panel uses the pair to cross-link the two places (see [Detail panel](#detail-panel)). Explicit reads use the resolved path, while loads use the path Claude Code logged, so a symlinked rules file can get two different labels; those two places are then not linked.
+
+### Agent messages
+
+**Agent messages** holds text that one agent delivered to another. A message lands here only when the log shows how it was delivered:
+
+| Child | Rule |
+|---|---|
+| **Task briefs** | A `<task-brief>` block placed directly after a `<t3-subagent-profile>` span at the start of the remaining user or developer text, after known wrapper sections are removed. Prose, quote or code-fence prefixes prevent this classification. Also the typed prompt of a Claude native subagent (sidechain), unless it is a `[Request interrupted by user` marker. |
+| **Completion notifications** | A Claude `<task-notification>` whose `<tool-use-id>` belongs to a built-in `Agent` or `Task` tool call. A notification for any other tool, an MCP tool named `Agent`, or an unknown id stays under **User messages → Task / subagent notifications**. |
+| **Peer messages** | A Claude user message or queued command whose `origin` has `kind: peer` and a `from` sender. |
+
+Some things never go here: the static role profile, which stays in instructions; a profile or brief quoted in assistant output; and text that merely mentions agents or developers. Codex `agent_message` events remain under **Task / subagent notifications**. Their event type alone does not establish received-message provenance; this collector does not distinguish received messages from assistant mirrors in that schema. The **Developer-role instructions** node, formerly **Developer messages**, holds Codex `developer`-role text: harness, memory, collaboration and skill instructions, not inter-agent content.
+
+Limits: provenance comes from the anchored wrapper shape alone. An exact unquoted delivery envelope pasted at the start of a message is indistinguishable from a delivered task brief. A T3 follow-up message to an existing child carries no wrapper, so it stays a **Typed prompt**. A brief separated from its profile by other text, or one that is not closed, also stays with the sender's text.
 
 ### Shell commands
 
