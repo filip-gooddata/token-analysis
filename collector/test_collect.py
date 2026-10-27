@@ -297,7 +297,7 @@ class EndToEnd(unittest.TestCase):
             claude_asst('m1', 2, 3, 0, 2000, 50, cw1=500),
             claude_user('again', 1),
             claude_asst('m2', 1, 3, 2050, 40, 30),
-            claude_asst('m3', 31 * 24, 3, 0, 100, 5),            # older than 30 days: outside every range
+            claude_asst('m3', 31 * 24, 3, 0, 100, 5),            # older than 30 days: before the 30-day preset
             claude_asst('m4', 3, 3, 0, 100, 5, model='claude-unknown-0'),
         ])
         write_jsonl(os.path.join(cl, 's1', 'subagents', 'agent-1.jsonl'), [
@@ -313,18 +313,25 @@ class EndToEnd(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp)
 
-    def test_reconciles_per_range_and_model(self):
-        rec = {(r['range'], r['model']): r for r in self.data['meta']['reconciliation']}
+    def test_reconciles_per_day_and_model(self):
+        rec = {r['model']: r for r in self.data['meta']['reconciliation']}
         self.assertTrue(self.data['meta']['reconciled'])
-        self.assertEqual(rec[('30d', 'opus-5.5')]['logged_total'], (2003 + 50) + (2093 + 30))
-        self.assertEqual(rec[('30d', 'gpt-6-luna')]['logged_total'], 560 + 720)
-        self.assertNotIn(('today', 'gpt-6-luna'), rec)  # codex calls were 26h before end
-        self.assertEqual(rec[('30d', 'haiku-5.5')]['logged_total'], 530)
+        self.assertEqual(self.data['meta']['reconciliation_mismatches'], [])
+        self.assertEqual(rec['opus-5.5']['logged_total'], (2003 + 50) + (2093 + 30) + (103 + 5))
+        self.assertEqual(rec['gpt-6-luna']['logged_total'], 560 + 720)
+        self.assertEqual(rec['haiku-5.5']['logged_total'], 530)
+        for m, r in rec.items():
+            self.assertEqual(sum(day_billed(self.data, m).values()), r['leaf_sum'], m)
+        self.assertEqual(last_days(self.data, 30, 'opus-5.5'), (2003 + 50) + (2093 + 30))
+        self.assertEqual(last_days(self.data, 1, 'gpt-6-luna'), 0)  # codex calls were 26h before end
         self.assertIn('claude-unknown-0', self.data['meta']['unpriced_models'])
         self.assertEqual([m['id'] for m in self.data['models']][:4], c.PRIMARY_MODELS)
 
-    def test_roles_and_ranges(self):
-        self.assertEqual([r['id'] for r in self.data['ranges']], ['today', '7d', '30d'])
+    def test_roles_and_days(self):
+        self.assertNotIn('ranges', self.data)
+        self.assertEqual(self.data['days'], {'first': '2026-09-19', 'last': '2026-10-20', 'count': 32})
+        self.assertIsNone(self.data['meta']['collected_from'])
+        self.assertEqual([r['id'] for r in self.data['roles']], ['top', 'drone', 'native'])
         self.assertEqual(self.data['meta']['sessions_by_role'], {'claude:native': 1, 'claude:top': 1, 'codex:drone': 1})
 
     def test_privacy_and_html(self):
@@ -365,6 +372,42 @@ def run_e2e(tmp, claude=None, codex=None, end=END, extra=()):
         return rc, None
     with open(out) as fh:
         return rc, json.load(fh)
+
+
+def day_billed(data, model=None):
+    """{local day: billed} summed over every leaf row, optionally for one model."""
+    first = datetime.date.fromisoformat(data['days']['first'])
+    mi = None if model is None else [m['id'] for m in data['models']].index(model)
+    out = defaultdict(int)
+    for n in data['tree']:
+        for (d, m, k), v in node_cells(n).items():
+            if mi is None or m == mi:
+                out[(first + datetime.timedelta(days=d)).isoformat()] += v[0]
+    return {d: b for d, b in out.items() if b}
+
+
+def last_days(data, n, model=None):
+    """Billed over the last n local days of the timeline, as the n-day preset selects them."""
+    last = datetime.date.fromisoformat(data['days']['last'])
+    return sum(b for d, b in day_billed(data, model).items()
+               if (last - datetime.date.fromisoformat(d)).days < n)
+
+
+class LocalTZ:
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        self.old = os.environ.get('TZ')
+        os.environ['TZ'] = self.name
+        __import__('time').tzset()
+
+    def __exit__(self, *a):
+        if self.old is None:
+            os.environ.pop('TZ')
+        else:
+            os.environ['TZ'] = self.old
+        __import__('time').tzset()
 
 
 def tc_event(h, last, total):
@@ -416,7 +459,7 @@ class ReviewFixes(unittest.TestCase):
         self.assertIsNone(c.ts_epoch('yesterday'))
         self.assertIsNone(c.ts_epoch(None))
 
-    def _range_hits(self, end, stamps):
+    def _day_hits(self, end, stamps):
         lines = [claude_user('hi', 1)]
         for i, t in enumerate(stamps):
             a = claude_asst('m%d' % i, 1, 1, 0, 0, 10 ** i)
@@ -425,34 +468,29 @@ class ReviewFixes(unittest.TestCase):
         rc, data = run_e2e(self.tmp, claude={'p/s.jsonl': lines}, end=end)
         self.assertEqual(rc, 0)
         self.assertTrue(data['meta']['oracle']['matched'])
-        return {r['range']: r['logged_total'] for r in data['meta']['reconciliation']}
+        self.assertTrue(data['meta']['reconciled'])
+        return data, day_billed(data)
 
-    def test_range_boundaries_start_inclusive_end_exclusive(self):
-        hits = self._range_hits('2026-10-20T12:00:00+00:00', [
-            '2026-10-13T12:00:00Z',        # exactly 7d before end: in 7d
-            '2026-10-13T11:59:59.999Z',    # just before: 30d only
-            '2026-10-20T12:00:00Z',        # exactly end: excluded
-            '2026-10-20T13:00:00+01:00'])  # same instant as end, other offset: excluded
-        self.assertEqual(hits['7d'], 1 + 1)
-        self.assertEqual(hits['30d'], 1 + 1 + 10 + 1)
+    def test_days_are_local_and_end_is_exclusive(self):
+        with LocalTZ('UTC'):
+            data, hits = self._day_hits('2026-10-20T12:00:00+00:00', [
+                '2026-10-13T00:00:00Z',        # local midnight: first second of the 13th
+                '2026-10-12T23:59:59.999Z',    # last instant of the 12th
+                '2026-10-20T12:00:00Z',        # exactly end: excluded
+                '2026-10-20T13:00:00+01:00'])  # same instant as end, other offset: excluded
+        self.assertEqual(hits, {'2026-10-13': 1 + 1, '2026-10-12': 10 + 1})
+        self.assertEqual(last_days(data, 7), 0)
+        self.assertEqual(last_days(data, 8), 2)
+        self.assertEqual(last_days(data, 9), 2 + 11)
 
     def test_today_is_the_local_calendar_day(self):
-        old = os.environ.get('TZ')
-        os.environ['TZ'] = 'Europe/Prague'
-        time_mod = __import__('time')
-        time_mod.tzset()
-        try:
-            hits = self._range_hits('2026-10-19T22:30:00Z', [  # 00:30 on 20 Oct in Prague (CEST)
+        with LocalTZ('Europe/Prague'):
+            data, hits = self._day_hits('2026-10-19T22:30:00Z', [  # 00:30 on 20 Oct in Prague (CEST)
                 '2026-10-19T22:10:00Z',          # 00:10 local: today
                 '2026-10-20T00:00:00+02:00',     # local midnight: today (inclusive)
                 '2026-10-19T21:50:00Z'])         # 23:50 local on the 19th: not today
-            self.assertEqual(hits['today'], 1 + 1 + 10 + 1)
-        finally:
-            if old is None:
-                os.environ.pop('TZ')
-            else:
-                os.environ['TZ'] = old
-            time_mod.tzset()
+        self.assertEqual(data['days']['last'], '2026-10-20')
+        self.assertEqual(hits, {'2026-10-20': 1 + 1 + 10 + 1, '2026-10-19': 100 + 1})
 
     def test_codex_token_count_only_logs(self):
         lines = [l for l in codex_lines(2) if l['type'] != 'token_usage_record']
@@ -467,8 +505,8 @@ class ReviewFixes(unittest.TestCase):
         self.assertEqual(st['token_count_calls'], 2)
         rc, data = run_e2e(self.tmp, codex={'2026/r.jsonl': lines})
         self.assertEqual(rc, 0)
-        rec = {(r['range'], r['model']): r for r in data['meta']['reconciliation']}
-        self.assertEqual(rec[('30d', 'gpt-6-luna')]['logged_total'], 12 + 15)
+        rec = {r['model']: r for r in data['meta']['reconciliation']}
+        self.assertEqual(rec['gpt-6-luna']['logged_total'], 12 + 15)
         self.assertTrue(data['meta']['oracle']['matched'])
 
     def test_codex_token_count_ignored_when_usage_records_exist(self):
@@ -485,16 +523,15 @@ class ReviewFixes(unittest.TestCase):
         o = data['meta']['oracle']
         self.assertTrue(o['matched'])
         self.assertEqual(o['mismatches'], [])
-        rows = {(r['range'], r['model'], r['role']): r['oracle'] for r in o['rows']}
-        self.assertEqual(rows[('30d', 'opus-5.5', 'envoy')], 18)
-        self.assertEqual(rows[('30d', 'gpt-6-luna', 'drone')], 560 + 720)
+        rows = {(r['model'], r['role']): r['oracle'] for r in o['rows']}
+        self.assertEqual(rows, {('opus-5.5', 'envoy'): 18, ('gpt-6-luna', 'drone'): 560 + 720})
 
     def test_oracle_mismatch_fails_unless_allowed(self):
         real = c.run_oracle
 
-        def skewed(*a):
-            out, stats = real(*a)
-            out[(2, 'opus-5.5', 'top')] += 1
+        def skewed(jobs, windows, *a):
+            out, stats = real(jobs, windows, *a)
+            out[(len(windows) - 1, 'opus-5.5', 'top')] += 1
             return out, stats
         c.run_oracle = skewed
         try:
@@ -505,7 +542,8 @@ class ReviewFixes(unittest.TestCase):
             rc, data = run_e2e(self.tmp, claude=fx, extra=('--allow-mismatch',))
             self.assertEqual(rc, 0)
             self.assertFalse(data['meta']['oracle']['matched'])
-            self.assertEqual([(m['range'], m['diff']) for m in data['meta']['oracle']['mismatches']], [('30d', -1)])
+            self.assertEqual([(m['day'], m['diff']) for m in data['meta']['oracle']['mismatches']],
+                             [(data['days']['last'], -1)])
         finally:
             c.run_oracle = real
 
@@ -515,7 +553,7 @@ class ReviewFixes(unittest.TestCase):
             claude_asst('m2', 1, 5, 0, 0, 3, model='claude-unknown-0'), claude_asst('m3', 1, 5, 0, 0, 3)]})
         self.assertEqual(rc, 0)
         m = data['meta']
-        self.assertEqual(m['unpriced_calls_30d'], {'claude-unknown-0': 2})
+        self.assertEqual(m['unpriced_calls'], {'claude-unknown-0': 2})
         self.assertEqual(m['coverageNote'], 'Costs use official API rates (platform.claude.com/docs/en/about-claude/'
                          'pricing, developers.openai.com/api/docs/pricing; fetched 2026-10-20). 2 calls on unpriced '
                          'models (counted as $0): claude-unknown-0 (2)')
@@ -523,6 +561,197 @@ class ReviewFixes(unittest.TestCase):
             html = fh.read()
         self.assertIn('id="coverage"', html)
         self.assertIn('2 calls on unpriced models', html)
+
+
+def stamped(mid, when, out=1, model='claude-opus-5-5'):
+    a = claude_asst(mid, 1, 1, 0, 0, out, model=model)
+    a['timestamp'] = when
+    return a
+
+
+class Timeline(unittest.TestCase):
+    def test_small_daily_values_add_up_over_any_window(self):
+        basis, days = defaultdict(set), 30
+        acc = {}
+        for d in range(days):
+            acc[(BASH_RES + ('cat',), d, 'm', 'top')] = [3, 0.4, 0.00004]
+            acc[(BASH_RES + ('ls',), d, 'm', 'top')] = [2, 0.3, 0.00003]
+            acc[(c.READ_RESULT, d, 'm', 'top')] = [1, 0.4, 0.00004]
+        for k in acc:
+            basis[k[0]].add(c.B_EST)
+        tree = c.build_tree(acc, ['m'], ['top'], basis)
+
+        def rows(n):
+            return [r for k in n.get('children', []) for r in rows(k)] if 'children' in n else n['v']
+        bash = find(tree, c.RESULTS, 'Built-in tools', 'Bash')
+        for node, per_day, units in ((bash, (0.7, 0.00007), 1), (find(tree, *c.READ_RESULT), (0.4, 0.00004), 1),
+                                     (find(bash['children'], 'cat'), (0.4, 0.00004), 2), (find(bash['children'], 'ls'), (0.3, 0.00003), 2)):
+            got = rows(node)
+            for lo in range(days):
+                for hi in range(lo, days):
+                    inside = [r for r in got if lo <= r[0] <= hi]
+                    n = hi - lo + 1
+                    self.assertLess(abs(sum(r[4] for r in inside) - per_day[0] * n), units + 1e-9, (node['label'], lo, hi))
+                    self.assertLess(abs(sum(r[5] for r in inside) - per_day[1] * n), 0.0001 * units + 1e-9, (lo, hi))
+                hi_sum = [r for r in got if r[0] <= lo]
+                self.assertLess(abs(sum(r[4] for r in hi_sum) - per_day[0] * (lo + 1)), 1, (node['label'], lo))
+                self.assertLess(abs(sum(r[5] for r in hi_sum) - per_day[1] * (lo + 1)), 0.0001, (node['label'], lo))
+            self.assertEqual(sum(r[4] for r in rows(bash)), round(0.7 * days))
+            self.assertAlmostEqual(sum(r[5] for r in rows(bash)), round(0.00007 * days, 4), places=9)
+            self.assertTrue(all(r[3] or r[4] or r[5] for r in got))
+
+    def test_carried_rounding_reaches_the_leaves_of_an_internal_command(self):
+        basis = defaultdict(set)
+        acc = {(BASH_RES + ('cat', c.EXPLICIT_INSTR, 'AGENTS.md'), 0, 'm', 'top'): [1, 0.4, 0.00004],
+               (BASH_RES + ('ls',), 0, 'm', 'top'): [1, 0.6, 0.00006],
+               (BASH_RES + ('ls',), 1, 'm', 'top'): [1, 0.1, 0.00001],
+               (BASH_RES + ('ls',), 2, 'm', 'top'): [1, 0.5, 0.00005]}
+        for k in acc:
+            basis[k[0]].add(c.B_EST)
+        bash = find(c.build_tree(acc, ['m'], ['top'], basis), c.RESULTS, 'Built-in tools', 'Bash')
+        def rows(n):
+            return [r for k in n['children'] for r in rows(k)] if 'children' in n else n['v']
+        got = rows(bash)
+        self.assertEqual(sum(r[4] for r in got), 2)
+        self.assertAlmostEqual(sum(r[5] for r in got), 0.0002, places=9)
+
+    def test_split_rows_stay_nonnegative_and_match_their_histogram(self):
+        basis, acc, hacc = defaultdict(set), {}, {}
+        for d in range(20):
+            for cmd, u, usd in (('cat', 0.6, 0.00006), ('ls', 0.3, 0.00003), ('rg', 0.45, 0.00004)):
+                if cmd != 'cat' or d % 3 == 0:
+                    acc[(BASH_RES + (cmd,), d, 'm', 'top')] = [2, u, usd]
+                    hacc[(BASH_RES + (cmd,), d, 'm', 'top')] = {0: [1, 1, u / 3, usd / 3], 2: [1, 1, u * 2 / 3, usd * 2 / 3]}
+        for k in acc:
+            basis[k[0]].add(c.B_EST)
+        bash = find(c.build_tree(acc, ['m'], ['top'], basis, hacc=hacc), c.RESULTS, 'Built-in tools', 'Bash')
+        carried = 0
+        for leaf in bash['children']:
+            for row, bins in zip(leaf['v'], leaf['h']):
+                self.assertGreaterEqual(min(row[4], row[5]), 0, (leaf['label'], row))
+                self.assertEqual(sum(b[3] for b in bins), row[4], (leaf['label'], row))
+                self.assertAlmostEqual(sum(b[4] for b in bins), row[5], places=9)
+                self.assertEqual(sum(b[2] for b in bins), row[3])
+                carried += not row[3]
+        self.assertTrue(carried)
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_dst_days_in_prague(self):
+        with LocalTZ('Europe/Prague'):
+            rc, data = run_e2e(self.tmp, end='2026-10-26T12:00:00Z', claude={'p/s.jsonl': [
+                claude_user('hi', 1),
+                stamped('a', '2026-10-25T00:30:00+02:00', 1),     # 25 Oct, before the clocks go back
+                stamped('b', '2026-10-25T23:30:00+01:00', 10),    # 25 Oct, the 25th hour of that day
+                stamped('c', '2026-10-24T23:59:00+02:00', 100),
+                stamped('d', '2026-10-26T00:10:00+01:00', 1000),
+                stamped('e', '2026-03-29T01:59:00+01:00', 10000),  # just before the spring change
+                stamped('f', '2026-03-29T03:00:00+02:00', 100000),
+                stamped('g', '2026-03-28T23:59:00+01:00', 1000000)]})
+        self.assertEqual(rc, 0)
+        self.assertEqual(day_billed(data), {
+            '2026-10-25': 2 + 11, '2026-10-24': 101, '2026-10-26': 1001,
+            '2026-03-29': 10001 + 100001, '2026-03-28': 1000001})
+        self.assertEqual(data['days'], {'first': '2026-03-28', 'last': '2026-10-26', 'count': 213})
+        self.assertEqual(last_days(data, 1), 1001)
+        self.assertEqual(last_days(data, 2), 1001 + 13)
+
+    def test_short_history_still_spans_more_than_thirty_days(self):
+        with LocalTZ('UTC'):
+            rc, data = run_e2e(self.tmp, claude={'p/s.jsonl': [claude_user('hi', 1), claude_asst('m1', 1, 1, 0, 0, 1)]})
+        self.assertEqual(rc, 0)
+        self.assertEqual(data['days'], {'first': '2026-09-20', 'last': '2026-10-20', 'count': c.MIN_DAYS})
+        self.assertGreater(data['days']['count'], 30)
+
+    def test_lookback_starts_at_local_midnight(self):
+        with LocalTZ('UTC'):
+            rc, data = run_e2e(self.tmp, extra=('--lookback', '3'), claude={'p/s.jsonl': [
+                claude_user('hi', 1),
+                stamped('a', '2026-10-17T23:59:59Z', 1),
+                stamped('b', '2026-10-18T00:00:00Z', 10),
+                stamped('c', '2025-01-01T00:00:00Z', 100)]})
+        self.assertEqual(rc, 0)
+        self.assertEqual(day_billed(data), {'2026-10-18': 11})
+        self.assertEqual(data['meta']['collected_from'], '2026-10-18T00:00:00+00:00')
+        self.assertEqual(data['days']['first'], '2026-09-20')
+
+    def test_all_history_by_default(self):
+        with LocalTZ('UTC'):
+            rc, data = run_e2e(self.tmp, claude={'p/s.jsonl': [
+                claude_user('hi', 1), stamped('a', '2025-01-01T08:00:00Z', 100), stamped('b', '2026-10-20T08:00:00Z')]})
+        self.assertEqual(rc, 0)
+        self.assertEqual(day_billed(data), {'2025-01-01': 101, '2026-10-20': 2})
+        self.assertEqual(data['days']['first'], '2025-01-01')
+        self.assertEqual(data['days']['count'], 658)
+        self.assertEqual(last_days(data, 30), 2)
+
+    def test_leaf_rows_are_sparse_and_sorted(self):
+        e2e = EndToEnd()
+        e2e.setUp()
+        try:
+            data = e2e.data
+            nd, nm, nr = data['days']['count'], len(data['models']), len(data['roles'])
+            leaves = []
+
+            def walk(n):
+                if 'children' in n:
+                    for ch in n['children']:
+                        walk(ch)
+                else:
+                    leaves.append(n)
+            for n in data['tree']:
+                walk(n)
+            for leaf in leaves:
+                keys = [tuple(r[:3]) for r in leaf['v']]
+                self.assertEqual(keys, sorted(set(keys)), leaf['label'])
+                for d, m, k, b, u, usd in leaf['v']:
+                    self.assertTrue(0 <= d < nd and 0 <= m < nm and 0 <= k < nr)
+                    self.assertTrue(b or u or usd)
+                if 'h' in leaf:
+                    self.assertEqual(len(leaf['h']), len(leaf['v']))
+            self.assertTrue(any(leaf['v'] for leaf in leaves))
+        finally:
+            shutil.rmtree(e2e.tmp, ignore_errors=True)
+
+
+class NoSubagentConfig(unittest.TestCase):
+    """A home with no ~/.config/subagents and no role-dispatch environment still collects and renders."""
+
+    def test_collects_from_a_bare_home(self):
+        import subprocess
+        home = tempfile.mkdtemp()
+        try:
+            write_jsonl(os.path.join(home, '.claude', 'projects', 'proj', 's.jsonl'),
+                        [claude_user('plain prompt ' + SECRET, 2), claude_asst('m1', 2, 5, 0, 100, 7)])
+            write_jsonl(os.path.join(home, '.claude', 'projects', 'proj', 's', 'subagents', 'agent-1.jsonl'),
+                        [claude_user('sub task', 3), claude_asst('m2', 3, 5, 0, 10, 2)])
+            write_jsonl(os.path.join(home, '.codex', 'sessions', '2026', 'r.jsonl'), codex_lines(4))
+            out, html = os.path.join(home, 'out.json'), os.path.join(home, 'out.html')
+            env = {'HOME': home, 'PATH': '/usr/bin:/bin', 'TZ': 'UTC', 'LANG': 'C.UTF-8'}
+            r = subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'collect.py'),
+                                '--out', out, '--html', html, '--end', END, '--jobs', '1'],
+                               env=env, cwd=home, capture_output=True, text=True, timeout=120)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertFalse(os.path.exists(os.path.join(home, '.config')))
+            with open(out) as fh:
+                raw = fh.read()
+            data = json.loads(raw)
+            self.assertEqual([x['id'] for x in data['roles']], ['top', 'native'])
+            self.assertEqual(data['meta']['sessions_by_role'], {'claude:native': 1, 'claude:top': 1, 'codex:top': 1})
+            self.assertTrue(data['meta']['reconciled'])
+            self.assertTrue(data['meta']['oracle']['matched'])
+            self.assertEqual(data['days']['last'], '2026-10-20')
+            with open(html) as fh:
+                page = fh.read()
+            for blob in (raw, page):
+                self.assertNotIn(SECRET, blob)
+                self.assertNotIn(home, blob)
+        finally:
+            shutil.rmtree(home)
 
 
 RULES = (c.INSTR, 'Instruction files', 'Rules files')
@@ -542,7 +771,7 @@ def find(nodes, *labels):
 
 
 def node_cells(n):
-    """{(range, model, role): [billed, unique, usd]} summed over a node's leaves."""
+    """{(day, model, role): [billed, unique, usd]} summed over a node's leaves."""
     out = defaultdict(lambda: [0, 0, 0.0])
     if 'children' in n:
         for ch in n['children']:
@@ -550,13 +779,15 @@ def node_cells(n):
                 for j in range(3):
                     out[k][j] += v[j]
         return out
-    for r, row in enumerate(n['v']):
-        for m, cells in enumerate(row or []):
-            for k, cell in enumerate(cells or []):
-                if cell:
-                    for j in range(3):
-                        out[(r, m, k)][j] += cell[j]
+    for d, m, k, *cell in n['v']:
+        for j in range(3):
+            out[(d, m, k)][j] += cell[j]
     return out
+
+
+def leaf_cell(n, d=0, m=0, k=0):
+    """A leaf's [billed, unique, usd] on day d for model m and role k; zeros when it has no row."""
+    return next(([*r[3:]] for r in n['v'] if r[:3] == [d, m, k]), [0, 0, 0.0])
 
 
 class FileLabels(unittest.TestCase):
@@ -689,21 +920,21 @@ class PerFileSplit(unittest.TestCase):
             basis[RULES + ('f%d.md' % i,)].add(c.B_EST)
         mem = (c.INSTR, 'Instruction files', 'User CLAUDE.md')
         acc[(mem + ('~/.claude/CLAUDE.md',), 0, 'm', 'top')] = [9, 1, 0.0]
-        tree = c.build_tree(acc, ['30d'], ['m'], ['top'], basis, top_files=3)
+        tree = c.build_tree(acc, ['m'], ['top'], basis, top_files=3)
         rules = find(tree, c.INSTR, 'Instruction files', 'Rules files')
         self.assertEqual([n['label'] for n in rules['children']], ['f0.md', 'f1.md', 'f2.md', 'Other (2 files)'])
-        self.assertEqual(rules['children'][-1]['v'][0][0][0], [97 + 96, 2, 0.02])
+        self.assertEqual(leaf_cell(rules['children'][-1]), [97 + 96, 2, 0.02])
         mem_node = find(tree, c.INSTR, 'Instruction files', 'User CLAUDE.md')
         self.assertEqual([n['label'] for n in mem_node['children']], ['~/.claude/CLAUDE.md'])
-        self.assertEqual(mem_node['children'][0]['v'][0][0][0], [9, 1, 0.0])
+        self.assertEqual(leaf_cell(mem_node['children'][0]), [9, 1, 0.0])
 
     def test_single_file_group_keeps_filename(self):
         acc = {(RULES + ('demo/rules/one.md',), 0, 'm', 'top'): [100, 50, 0.01]}
         basis = defaultdict(set, {RULES + ('demo/rules/one.md',): {c.B_EST}})
-        tree = c.build_tree(acc, ['30d'], ['m'], ['top'], basis)
+        tree = c.build_tree(acc, ['m'], ['top'], basis)
         rules = find(tree, c.INSTR, 'Instruction files', 'Rules files')
         self.assertEqual([n['label'] for n in rules['children']], ['demo/rules/one.md'])
-        self.assertEqual(rules['children'][0]['v'][0][0][0], [100, 50, 0.01])
+        self.assertEqual(leaf_cell(rules['children'][0]), [100, 50, 0.01])
 
 
 class PerFileEndToEnd(unittest.TestCase):
@@ -1472,21 +1703,21 @@ class CommandSplit(unittest.TestCase):
             for mi, m in enumerate(('opus-5.5', 'gpt-6-luna')):
                 acc[(BASH_RES + (lab,), 0, m, 'top')] = [n + mi, 1, 0.5]
                 basis[BASH_RES + (lab,)].add(c.B_EST)
-        tree = c.build_tree(acc, ['30d'], ['opus-5.5', 'gpt-6-luna'], ['top'], basis, top_cmds=3)
+        tree = c.build_tree(acc, ['opus-5.5', 'gpt-6-luna'], ['top'], basis, top_cmds=3)
         bash = find(tree, c.RESULTS, 'Built-in tools', 'Bash')
         labels = [n['label'] for n in bash['children']]
         # the folded bucket sorts by its total like any other child
         self.assertEqual(labels, ['git status', 'cat', 'Other (3 commands)', 'rg', c.CMD_UNPARSED, c.CMD_NO_SHELL])
         other = find(bash['children'], 'Other (3 commands)')
-        self.assertEqual(other['v'][0][0][0], [200 + 100 + 50, 3, 1.5])
-        self.assertEqual(other['v'][0][1][0], [201 + 101 + 51, 3, 1.5])
+        self.assertEqual(leaf_cell(other), [200 + 100 + 50, 3, 1.5])
+        self.assertEqual(leaf_cell(other, m=1), [201 + 101 + 51, 3, 1.5])
         # per model, the children add up to the node and to the raw accumulator
         for m in (0, 1):
             self.assertEqual(sum(cell[(0, m, 0)][0] for cell in [node_cells(bash)]),
                              sum(v[0] for k, v in acc.items() if k[2] == ('opus-5.5', 'gpt-6-luna')[m]))
         only_rejected = c.build_tree({(BASH_RES + (c.CMD_REJECTED,), 0, 'm', 'top'): [7, 1, 0.0],
                                       (BASH_RES + ('ls',), 0, 'm', 'top'): [9, 1, 0.0]},
-                                     ['30d'], ['m'], ['top'], basis, top_cmds=3)
+                                     ['m'], ['top'], basis, top_cmds=3)
         self.assertEqual([n['label'] for n in find(only_rejected, c.RESULTS, 'Built-in tools', 'Bash')['children']],
                          ['ls', c.CMD_REJECTED])
 
@@ -1499,8 +1730,8 @@ class CommandSplit(unittest.TestCase):
                  (BASH_RES + ('rg',), 0, 'm', 'top'): [5, 0.6, 0.00003]}
         for k in split:
             basis[k[0]].add(c.B_EST)
-        tree = c.build_tree(split, ['30d'], ['m'], ['top'], basis)
-        cells = [n['v'][0][0][0] for n in find(tree, c.RESULTS, 'Built-in tools', 'Bash')['children']]
+        tree = c.build_tree(split, ['m'], ['top'], basis)
+        cells = [leaf_cell(n) for n in find(tree, c.RESULTS, 'Built-in tools', 'Bash')['children']]
         self.assertEqual(sum(x[0] for x in cells), 15)
         self.assertEqual(sum(x[1] for x in cells), 2)  # round(1.8)
         self.assertAlmostEqual(sum(x[2] for x in cells), 0.0001, places=9)  # round(0.00009, 4)
@@ -1511,9 +1742,9 @@ class CommandSplit(unittest.TestCase):
             split = {(BASH_RES + (lab,), 0, 'm', 'top'): cell for lab, cell in cells}
             for k in split:
                 basis[k[0]].add(c.B_EST)
-            tree = c.build_tree(split, ['30d'], ['m'], ['top'], basis)
+            tree = c.build_tree(split, ['m'], ['top'], basis)
             kids = find(tree, c.RESULTS, 'Built-in tools', 'Bash')['children']
-            return [n['v'][0][0][0] for n in kids if n['v'][0][0][0]]
+            return [leaf_cell(n) for n in kids if any(leaf_cell(n))]
         # compact() serializes an unsplit $0.00005 as 0.0001; a single split child must match
         for cell, usd in (([1, 1, 0.00005], 0.0001), ([1, 1, -0.00005], -0.0001), ([1, 2.5, 0.00015], 0.0001)):
             out = bash_cells([('cat', cell)])
@@ -1664,7 +1895,7 @@ class ReviewR13(unittest.TestCase):
             tag = ROLE_TAG % bad
             self.assertEqual(dict(c.split_text(tag, 'Typed prompts')), {(c.USER, 'Typed prompts'): len(tag)}, bad)
         self.assertEqual(c.role_order({'top', 'zeta', 'envoy-peer'}),
-                         ['top', 'envoy', 'drone', 'review', 'native', 'envoy-peer', 'zeta'])
+                         ['top', 'envoy-peer', 'zeta'])
 
     def test_unknown_role_sessions(self):
         tmp = tempfile.mkdtemp()
@@ -1683,11 +1914,11 @@ class ReviewR13(unittest.TestCase):
                 codex={'2026/r.jsonl': codex_lines(1, role='envoy-peer')})
             self.assertEqual(rc, 0)
             self.assertTrue(data['meta']['oracle']['matched'])
-            self.assertEqual(data['roles'], [{'id': r, 'label': l} for r, l in c.ROLES]
-                             + [{'id': 'envoy-peer', 'label': 'Envoy peer'}, {'id': 'zz-made-up', 'label': 'Zz made up'}])
+            self.assertEqual(data['roles'], [{'id': 'envoy-peer', 'label': 'Envoy peer'},
+                                             {'id': 'zz-made-up', 'label': 'Zz made up'}])
             self.assertEqual(data['meta']['sessions_by_role'], {'claude:zz-made-up': 1, 'codex:envoy-peer': 1})
             roles = {k[2] for n in data['tree'] for k, v in node_cells(n).items() if v[0]}
-            self.assertEqual(roles, {5, 6})
+            self.assertEqual(roles, {0, 1})
         finally:
             shutil.rmtree(tmp)
 
@@ -2266,6 +2497,34 @@ class ReviewR18c(unittest.TestCase):
 
 
 class Histogram(unittest.TestCase):
+    def test_daily_zero_metric_cells_preserve_occurrences_in_selected_dates(self):
+        first = datetime.date(2026, 10, 20)
+        with LocalTZ('UTC'):
+            start = datetime.datetime.combine(first, datetime.time()).timestamp()
+            days = c.Days(first, first + datetime.timedelta(days=1), start, start + 2 * 86400)
+            events = []
+            for day in range(2):
+                for i, size in enumerate((11, 13, 17, 19)):
+                    events.append(('B', (c.INSTR,), size, 0, c.B_EST, 'file-%d.md' % i))
+                for i, size in enumerate((23, 29, 31, 37)):
+                    events.append(('B', BASH_RES, size, 0, c.B_EST, 'command-%d' % i))
+                for i, size in enumerate((7, 9)):
+                    events.append(('B', (c.TOOLCTX, 'Tool schemas', 'schema-%d' % i), size, 0, c.B_EST))
+                for i, size in enumerate((6, 8)):
+                    events.append(('B', TYPED + ('prompt-%d' % i,), size, 0, c.B_EST))
+                events.append(call(1, t=start + day * 86400 + 12 * 3600))
+                events.append(('R',))
+            acc, hacc, _, basis = replay_h(events, windows=days)
+        self.assertEqual(sum(b[0] for bins in hacc.values() for b in bins.values()), 24)
+        tree = c.build_tree(acc, ['opus-5.5'], ['top'], basis, hacc=hacc)
+        self.check_tree(tree)
+        rows = [(row, bins) for leaf in hist_leaves(tree) for row, bins in zip(leaf['v'], leaf['h'])]
+        for lo, hi, expected in ((0, 0, 12), (1, 1, 12), (0, 1, 24)):
+            selected = [(row, bins) for row, bins in rows if lo <= row[0] <= hi]
+            self.assertEqual(sum(b[1] for _, bins in selected for b in bins), expected)
+            self.assertEqual(sum(row[3] for row, _ in selected), hi - lo + 1)
+        self.assertTrue(any(not any(row[3:]) and any(b[1] for b in bins) for row, bins in rows))
+
     def test_size_bin_edges(self):
         self.assertEqual([c.size_bin(t) for t in (0, 99.9, 100, 199, 200, 999, 1000, 999999, 1000000, 5e6)],
                          [0, 0, 1, 1, 2, 3, 4, 12, 13, 13])
@@ -2328,31 +2587,28 @@ class Histogram(unittest.TestCase):
 
     def test_serialized_histograms_match_cells(self):
         acc, hacc, _, basis = replay_h(CommandSplit().events(True))
-        tree = c.build_tree(acc, ['30d'], ['opus-5.5', 'gpt-6-luna'], ['top'], basis, top_cmds=1, hacc=hacc)
+        tree = c.build_tree(acc, ['opus-5.5', 'gpt-6-luna'], ['top'], basis, top_cmds=1, hacc=hacc)
         self.check_tree(tree)
         other = find(tree, c.RESULTS, 'Built-in tools', 'Bash', 'Other (2 commands)')
-        self.assertTrue(other['h'][0][0][0])
-        plain = c.build_tree(acc, ['30d'], ['opus-5.5', 'gpt-6-luna'], ['top'], basis, top_cmds=1)
+        self.assertTrue(other['h'][0])
+        plain = c.build_tree(acc, ['opus-5.5', 'gpt-6-luna'], ['top'], basis, top_cmds=1)
         self.assertNotIn('h', next(hist_leaves(plain)))
 
     def check_tree(self, tree):
         seen = 0
         for leaf in hist_leaves(tree):
-            for vr, hr in zip(leaf['v'], leaf['h']):
-                self.assertEqual(vr is None, hr is None)
-                for vm, hm in zip(vr or [], hr or []):
-                    self.assertEqual(vm is None, hm is None)
-                    for cell, bins in zip(vm or [], hm or []):
-                        self.assertEqual(cell is None, bins is None, leaf['label'])
-                        if not cell:
-                            continue
-                        seen += 1
-                        self.assertEqual([b[0] for b in bins], sorted({b[0] for b in bins}))
-                        self.assertTrue(all(0 <= b[0] <= len(c.HIST_EDGES) for b in bins))
-                        self.assertEqual(sum(b[2] for b in bins), cell[0], leaf['label'])
-                        self.assertEqual(sum(b[3] for b in bins), cell[1], leaf['label'])
-                        self.assertAlmostEqual(sum(b[4] for b in bins), cell[2], places=9, msg=leaf['label'])
-                        self.assertTrue(all(b[1] >= 0 for b in bins))
+            self.assertEqual(len(leaf['v']), len(leaf['h']), leaf['label'])
+            self.assertEqual([r[:3] for r in leaf['v']], sorted(r[:3] for r in leaf['v']))
+            for row, bins in zip(leaf['v'], leaf['h']):
+                cell = row[3:]
+                self.assertTrue(any(cell) or any(b[1] for b in bins), leaf['label'])
+                seen += 1
+                self.assertEqual([b[0] for b in bins], sorted({b[0] for b in bins}))
+                self.assertTrue(all(0 <= b[0] <= len(c.HIST_EDGES) for b in bins))
+                self.assertEqual(sum(b[2] for b in bins), cell[0], leaf['label'])
+                self.assertEqual(sum(b[3] for b in bins), cell[1], leaf['label'])
+                self.assertAlmostEqual(sum(b[4] for b in bins), cell[2], places=9, msg=leaf['label'])
+                self.assertTrue(all(b[1] >= 0 for b in bins))
         self.assertGreater(seen, 0)
 
     def test_end_to_end_leaves_carry_consistent_histograms(self):

@@ -66,6 +66,24 @@ body { padding: 24px 32px; }
 .tkd .li .lb { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tkd .li .vv { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tkd .li .pp { color: var(--fg2); font-size: 12px; font-variant-numeric: tabular-nums; width: 40px; text-align: right; }
+.tkd .timeline { border: 1px solid var(--line); border-radius: var(--rad); padding: 8px 10px 6px; margin-bottom: 12px; }
+.tkd .thead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 4px; }
+.tkd .thead .t { font-size: 12px; font-weight: 600; color: var(--fg2); }
+.tkd .thead .tl { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
+.tkd .thead .tn { font-size: 12px; color: var(--fg2); white-space: nowrap; }
+.tkd .track { --th: 18px; position: relative; height: 30px; touch-action: none; }
+.tkd .track .rail, .tkd .track .fill { position: absolute; top: 13px; height: 4px; border-radius: 2px; pointer-events: none; }
+.tkd .track .rail { left: calc(var(--th) / 2); right: calc(var(--th) / 2); background: var(--wash); }
+.tkd .track .fill { background: var(--c1); }
+.tkd .track input { position: absolute; inset: 0; width: 100%; height: 30px; margin: 0; background: none; pointer-events: none; -webkit-appearance: none; appearance: none; }
+.tkd .track input::-webkit-slider-runnable-track { background: none; height: 30px; }
+.tkd .track input::-moz-range-track { background: none; }
+.tkd .track input::-webkit-slider-thumb { -webkit-appearance: none; pointer-events: auto; width: var(--th); height: var(--th); margin-top: 6px; border-radius: 50%; background: var(--surface); border: 2px solid var(--c1); cursor: grab; }
+.tkd .track input::-moz-range-thumb { pointer-events: auto; width: 14px; height: 14px; border-radius: 50%; background: var(--surface); border: 2px solid var(--c1); cursor: grab; }
+.tkd .track input:focus-visible { outline: none; }
+.tkd .track input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c1) 35%, transparent); }
+.tkd .track input:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c1) 35%, transparent); }
+.tkd .tends { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--fg2); font-variant-numeric: tabular-nums; }
 .tkd .models { border: 1px solid var(--line); border-radius: var(--rad); padding: 8px 10px; margin-bottom: 12px; }
 .tkd .mhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 6px; }
 .tkd .mhead .t { font-size: 12px; font-weight: 600; color: var(--fg2); }
@@ -122,10 +140,23 @@ body { padding: 24px 32px; }
 <body>
 <div class="tkd" id="tkd">
   <div class="controls">
-    <div class="seg" id="f-range" aria-label="Time range"></div>
     <select id="f-role" aria-label="Agent role"></select>
     <div class="seg" id="f-metric" aria-label="Metric"></div>
     <span class="sample" id="src-pill"></span>
+  </div>
+  <div class="timeline" id="f-time" role="group" aria-label="Time period">
+    <div class="thead">
+      <span class="t">Period</span>
+      <div class="seg" id="f-range" aria-label="Period shortcuts"></div>
+      <span class="tl" id="t-label" aria-live="polite"></span>
+      <span class="tn" id="t-days"></span>
+    </div>
+    <div class="track" id="t-track">
+      <div class="rail"></div><div class="fill" id="t-fill"></div>
+      <input type="range" id="t-from" aria-label="Start of the period" min="0" step="1">
+      <input type="range" id="t-to" aria-label="End of the period" min="0" step="1">
+    </div>
+    <div class="tends"><span id="t-first"></span><span id="t-last"></span></div>
   </div>
   <div class="models" id="f-models" role="group" aria-label="Models">
     <div class="mhead">
@@ -159,25 +190,27 @@ const loadModels = () => {
   return new Set(MODEL_IDS.filter(id => !(Array.isArray(off) && off.includes(id))));
 };
 const saveModels = () => { try { localStorage.setItem(MODEL_STORE, JSON.stringify(MODEL_IDS.filter(id => !state.models.has(id)))); } catch (e) { /* storage unavailable */ } };
-const state = { metric: 'billed', range: '30d', models: loadModels(), role: 'all', path: [], focus: [] };
+const NDAYS = DATA.days.count, LAST = NDAYS - 1;
+const PRESETS = [{ id: 'today', label: 'Today', days: 1 }, { id: '7d', label: '7 days', days: 7 }, { id: '30d', label: '30 days', days: 30 }];
+const presetFrom = p => Math.max(0, NDAYS - p.days);
+// from and to are day indexes; 0 and LAST are the unbounded ends
+const state = { metric: 'billed', from: presetFrom(PRESETS[2]), to: LAST, models: loadModels(), role: 'all', path: [], focus: [] };
 const CLASSES = [{ id: 'anthropic', label: 'Claude' }, { id: 'openai', label: 'GPT' }];
 const providerOf = id => (DATA.models.find(m => m.id === id) || {}).provider || 'other';
 const zero = () => ({ billed: 0, unique: 0, usd: 0 });
-function deriveLeaf(leaf) {
-  const ri = DATA.ranges.findIndex(r => r.id === state.range), out = zero();
-  const byModel = (leaf.v || [])[ri] || [];
-  MODEL_IDS.forEach((mid, mi) => {
-    if (!state.models.has(mid)) return;
-    const byRole = byModel[mi] || [];
-    ROLE_IDS.forEach((rid, k) => {
-      if (state.role !== 'all' && state.role !== rid) return;
-      const c = byRole[k];
-      if (c) { out.billed += c[0]; out.unique += c[1]; out.usd += c[2]; }
-    });
-  });
+// The current period, role and (unless allModels) model selection, as a test on a leaf row [day, model, role, ...].
+function filterOf(allModels) {
+  const lo = state.from > 0 ? state.from : -Infinity, hi = state.to < LAST ? state.to : Infinity;
+  const on = MODEL_IDS.map(id => allModels || state.models.has(id)), k = ROLE_IDS.indexOf(state.role);
+  return r => r[0] >= lo && r[0] <= hi && on[r[1]] && (state.role === 'all' || r[2] === k);
+}
+function deriveLeaf(leaf, keep) {
+  const out = zero();
+  for (const r of leaf.v || []) if (keep(r)) { out.billed += r[3]; out.unique += r[4]; out.usd += r[5]; }
   return out;
 }
 function computeAll() {
+  const keep = filterOf(false);
   const vals = new Map();
   const walk = (node, cat) => {
     let v;
@@ -187,7 +220,7 @@ function computeAll() {
         const cv = walk(c, cat || c.id);
         v.billed += cv.billed; v.unique += cv.unique; v.usd += cv.usd;
       }
-    } else v = deriveLeaf(node);
+    } else v = deriveLeaf(node, keep);
     vals.set(node.id, v);
     return v;
   };
@@ -223,7 +256,15 @@ function buildControls() {
       host.append(b);
     }
   };
-  seg($('f-range'), DATA.ranges, 'range');
+  const pr = $('f-range');
+  pr.replaceChildren();
+  for (const p of PRESETS) {
+    const b = el('button', null, p.label);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String(state.to === LAST && state.from === presetFrom(p)));
+    b.addEventListener('click', () => setPeriod(presetFrom(p), LAST));
+    pr.append(b);
+  }
   seg($('f-metric'), METRICS, 'metric');
   const sel = (host, items, key, allLabel) => {
     if (!host.options.length) {
@@ -235,21 +276,17 @@ function buildControls() {
   };
   sel($('f-role'), DATA.roles, 'role', 'All roles');
 }
-// Per-model totals over the whole tree for the current range and role, ignoring the model selection.
+// Per-model totals over the whole tree for the current period and role, ignoring the model selection.
+// A model with usage on any collected day stays listed.
 function modelTotals() {
-  const ri = DATA.ranges.findIndex(r => r.id === state.range);
+  const keep = filterOf(true);
   const t = MODEL_IDS.map(() => zero()), seen = MODEL_IDS.map(() => false);
   const walk = n => {
     if (n.children) return n.children.forEach(walk);
-    (n.v || []).forEach((byModel, r) => (byModel || []).forEach((byRole, mi) => {
-      if (byRole && byRole.some(Boolean)) seen[mi] = true;
-      if (r !== ri || !byRole) return;
-      ROLE_IDS.forEach((rid, k) => {
-        const c = byRole[k];
-        if (!c || (state.role !== 'all' && state.role !== rid)) return;
-        t[mi].billed += c[0]; t[mi].unique += c[1]; t[mi].usd += c[2];
-      });
-    }));
+    for (const r of n.v || []) {
+      seen[r[1]] = true;
+      if (keep(r)) { const x = t[r[1]]; x.billed += r[3]; x.unique += r[4]; x.usd += r[5]; }
+    }
   };
   walk(ROOT);
   return { t, seen };
@@ -362,7 +399,7 @@ function render() {
     fkeep.push(c.id); n = c;
   }
   state.focus = fkeep;
-  if (!(rootV > 0)) return renderEmpty(state.models.size ? 'No usage for the selected models in this range and role.' : 'No models selected. Pick at least one model above.');
+  if (!(rootV > 0)) return renderEmpty(state.models.size ? 'No usage for the selected models in this period and role.' : 'No models selected. Pick at least one model above.');
   const H = 400, TOP = 46, COLW = 120, GAP = 52;
   const last = cols[cols.length - 1];
   const ghost = last.children.some(c => c.children);
@@ -427,25 +464,22 @@ const EDGES = DATA.meta.size_bin_edges || [];
 const NBINS = EDGES.length + 1;
 const tok = n => n >= 1e6 ? (n / 1e6) + 'M' : n >= 1e3 ? (n / 1e3) + 'K' : String(n);
 const binLabel = b => b === 0 ? `< ${tok(EDGES[0])}` : b === EDGES.length ? `≥ ${tok(EDGES[b - 1])}` : `${tok(EDGES[b - 1])}–${tok(EDGES[b])}`;
-// Per-model totals and size bins of a node, under the current range, role and model selection.
+// Per-model totals and size bins of a node, under the current period, role and model selection.
 function nodeStats(node) {
-  const ri = DATA.ranges.findIndex(r => r.id === state.range);
+  const keep = filterOf(false);
   const byModel = MODEL_IDS.map(() => zero());
   const bins = Array.from({ length: NBINS }, () => ({ n: 0, billed: 0, unique: 0, usd: 0 }));
   const walk = n => {
     if (n.children) return n.children.forEach(walk);
-    const vr = (n.v || [])[ri] || [], hr = (n.h || [])[ri] || [];
-    MODEL_IDS.forEach((mid, mi) => {
-      if (!state.models.has(mid)) return;
-      ROLE_IDS.forEach((rid, k) => {
-        if (state.role !== 'all' && state.role !== rid) return;
-        const c = (vr[mi] || [])[k];
-        if (c) { byModel[mi].billed += c[0]; byModel[mi].unique += c[1]; byModel[mi].usd += c[2]; }
-        for (const [b, cnt, billed, unique, usd] of ((hr[mi] || [])[k] || [])) {
-          const t = bins[b];
-          t.n += cnt; t.billed += billed; t.unique += unique; t.usd += usd;
-        }
-      });
+    const hs = n.h || [];
+    (n.v || []).forEach((r, j) => {
+      if (!keep(r)) return;
+      const x = byModel[r[1]];
+      x.billed += r[3]; x.unique += r[4]; x.usd += r[5];
+      for (const [b, cnt, billed, unique, usd] of hs[j] || []) {
+        const t = bins[b];
+        t.n += cnt; t.billed += billed; t.unique += unique; t.usd += usd;
+      }
     });
   };
   walk(node);
@@ -490,7 +524,7 @@ function renderDetail(vals) {
   box.replaceChildren();
   box.dataset.id = node.id;
   box.append(el('h2', null, node.label + (node.children ? ' ›' : '')),
-    el('div', 'dpath', chain.length > 1 ? chain.slice(0, -1).map(n => n.label).join(' › ') : 'Every token in the selected range, role and models'));
+    el('div', 'dpath', chain.length > 1 ? chain.slice(0, -1).map(n => n.label).join(' › ') : 'Every token in the selected period, role and models'));
   const stats = el('div', 'stats');
   const stat = (k, x, key) => { const s = el('div', 'st'); s.append(el('div', 'k', k), el('div', 'x', x)); if (key) s.dataset.k = key; stats.append(s); };
   stat(METRICS.find(x => x.id === m).label, fmt(v[m], m), 'value');
@@ -607,6 +641,40 @@ function renderEmpty(msg) {
 $('src-pill').textContent = DATA.meta.pill;
 $('src-pill').title = DATA.meta.pillTitle || '';
 if (DATA.meta.coverageNote) { $('coverage').textContent = DATA.meta.coverageNote; $('coverage').hidden = false; }
+const dayOf = i => { const [y, m, d] = DATA.days.first.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + i)); };
+const YEARS = dayOf(0).getUTCFullYear() !== dayOf(LAST).getUTCFullYear();
+const dayLabel = i => dayOf(i).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: YEARS ? 'numeric' : undefined, timeZone: 'UTC' });
+const fromIn = $('t-from'), toIn = $('t-to');
+function paintPeriod() {
+  fromIn.value = state.from; toIn.value = state.to;
+  const a = state.from > 0 ? dayLabel(state.from) : 'No start limit', b = state.to < LAST ? dayLabel(state.to) : 'No end limit';
+  fromIn.setAttribute('aria-valuetext', state.from > 0 ? `From ${dayLabel(state.from)}` : `No start limit (data from ${dayLabel(0)})`);
+  toIn.setAttribute('aria-valuetext', state.to < LAST ? `Through ${dayLabel(state.to)}` : `No end limit (through ${dayLabel(LAST)})`);
+  fromIn.style.zIndex = state.from > LAST / 2 ? 3 : 1;
+  toIn.style.zIndex = 2;
+  $('t-label').textContent = state.from === state.to && state.to < LAST && state.from > 0 ? a : `${a} – ${b}`;
+  const n = state.to - state.from + 1;
+  $('t-days').textContent = state.from > 0 || state.to < LAST ? (n === 1 ? '1 day' : `${n} days`) : 'all collected history';
+  const f = $('t-fill');
+  f.style.left = `calc(var(--th) / 2 + (100% - var(--th)) * ${LAST ? state.from / LAST : 0})`;
+  f.style.width = `calc((100% - var(--th)) * ${LAST ? (state.to - state.from) / LAST : 0})`;
+}
+function setPeriod(from, to) {
+  if (from === state.from && to === state.to) return paintPeriod();
+  state.from = from; state.to = to;
+  paintPeriod(); buildControls(); buildModels(); render();
+}
+for (const inp of [fromIn, toIn]) {
+  inp.max = LAST;
+  inp.addEventListener('input', () => {
+    const v = Number(inp.value);
+    if (inp === fromIn) setPeriod(Math.min(v, state.to), state.to);
+    else setPeriod(state.from, Math.max(v, state.from));
+  });
+}
+$('t-first').textContent = dayLabel(0);
+$('t-last').textContent = dayLabel(LAST);
+paintPeriod();
 buildControls();
 buildModels();
 render();

@@ -64,13 +64,14 @@ MODEL_SUFFIX_RE = re.compile(r'(?:\[[^\]]*\]|-\d{8})+$')
 MODEL_LABELS = {'fable-5.1': 'Fable 5.1', 'opus-5.5': 'Opus 5.5', 'sonnet-5.5': 'Sonnet 5.5',
                 'haiku-5.5': 'Haiku 5.5', 'haiku-4.5': 'Haiku 4.5'}
 PRIMARY_MODELS = ['opus-5.5', 'haiku-5.5', 'gpt-6-luna', 'gpt-6-astra']
-# Known roles in display order; any other role found in a subagent profile tag is appended after them.
+# Display order of the known roles; any other role found in a subagent profile tag comes after them.
 ROLES = [('top', 'Top-level'), ('envoy', 'Envoy'), ('drone', 'Drone'), ('review', 'Review'),
          ('native', 'Native subagent')]
 IMAGE_TOKENS = 1600          # fixed estimate per image block (no pixel sizes in logs)
 FALLBACK_CHARS_PER_TOKEN = 3.5
 CALIBRATION_BOUNDS = (1.5, 6.0)
 MAX_CHILDREN = 9             # long tails beyond this are merged into "Other …"
+MIN_DAYS = 31                # the timeline always spans more than 30 days, so the 30-day preset starts on a dated day
 FILE_TOP_N = 12              # per-file instruction nodes keep this many files, the rest become "Other (k files)"
 CMD_TOP_N = 12               # shell tool nodes keep this many commands, the rest become "Other (k commands)"
 # Upper edges of the per-occurrence size bins (tokens, 1-2-5 steps): bin 0 is <100, bin 13 is >=1M.
@@ -131,9 +132,9 @@ def role_label(role):
 
 
 def role_order(roles):
-    """Known roles in their fixed order, then the other roles in roles sorted."""
+    """The roles found, known ones in their fixed order, then the others sorted."""
     known = [r for r, _ in ROLES]
-    return known + sorted(set(roles) - set(known))
+    return [r for r in known if r in roles] + sorted(set(roles) - set(known))
 
 
 def model_id(raw):
@@ -2596,10 +2597,42 @@ def split_share(fs, total):
     return out
 
 
+class Days:
+    """Local calendar days first..last. A call at ts belongs to the day it falls on if start_ts <= ts < end_ts."""
+
+    def __init__(self, first, last, start_ts, end_ts):
+        self.first, self.last, self.start_ts, self.end_ts = first, last, start_ts, end_ts
+
+    def __len__(self):
+        return (self.last - self.first).days + 1
+
+    def hits(self, ts):
+        if not self.start_ts <= ts < self.end_ts:
+            return []
+        i = (datetime.date.fromtimestamp(ts) - self.first).days
+        return [i] if 0 <= i < len(self) else []
+
+    def iso(self, i):
+        return (self.first + datetime.timedelta(days=i)).isoformat()
+
+
+def local_midnight(day):
+    return datetime.datetime.combine(day, datetime.time()).timestamp()
+
+
+def window_hits(windows, ts):
+    """Indexes of the windows holding ts: a Days, or a list of (start, end) spans."""
+    if ts is None:
+        return []
+    if isinstance(windows, Days):
+        return windows.hits(ts)
+    return [i for i, (a, b) in enumerate(windows) if a <= ts < b]
+
+
 def attribute(session, ratios, windows, acc, recon, counters, basis, fits=None, hacc=None):
-    """Replays one session. acc[(path, ri, model, role)] = [billed, unique, usd].
-    hacc, if given, gets the same cells split by occurrence size:
-    hacc[(path, ri, model, role)] = {size bin: [occurrences, billed, unique, usd]}."""
+    """Replays one session. acc[(path, day, model, role)] = [billed, unique, usd], day being the index of
+    the window that holds the call. hacc, if given, gets the same cells split by occurrence size:
+    hacc[(path, day, model, role)] = {size bin: [occurrences, billed, unique, usd]}."""
     role = session['role']
     ratio = ratios[session['src']]['chars_per_token']
     ctx, new, pend_u = {}, {}, {}
@@ -2658,7 +2691,7 @@ def attribute(session, ratios, windows, acc, recon, counters, basis, fits=None, 
                 basis[path].add(B_EST)
         elif k == 'C':
             _, ts, model, C, cr, cw5, cw1, out, reas, outs, src = ev
-            ris = [i for i, (a, b) in enumerate(windows) if ts is not None and a <= ts < b]
+            ris = window_hits(windows, ts)
             E = sum(ctx.values())
             P = sum(v for _, v in prefix)
             if fits is not None and C:
@@ -2708,7 +2741,7 @@ def attribute(session, ratios, windows, acc, recon, counters, basis, fits=None, 
             if ris:
                 recon_add(recon, ris, model, C + out)
                 counters['calls_in_range'] += 1
-                if rt is None and len(windows) - 1 in ris:
+                if rt is None:
                     counters['unpriced_calls:' + model] += 1
             off = 0
             n_prefix = len(prefix) + 1
@@ -2875,23 +2908,27 @@ def recon_add(recon, ris, model, n):
 
 
 # ---------------------------------------------------------------- tree building
-def build_tree(acc, range_ids, model_ids, role_ids, basis, top_files=FILE_TOP_N, top_cmds=CMD_TOP_N, hacc=None):
-    """The drill-down tree. With hacc (see attribute), each leaf also gets 'h', its size histogram."""
-    R, M, K = len(range_ids), len(model_ids), len(role_ids)
+def build_tree(acc, model_ids, role_ids, basis, top_files=FILE_TOP_N, top_cmds=CMD_TOP_N, hacc=None):
+    """The drill-down tree. A leaf's 'v' lists cells with metrics or occurrences as [day, model, role, billed, unique, usd].
+    With hacc (see attribute), each leaf also gets 'h', the size histogram of each 'v' cell in the same order."""
     mi = {m: i for i, m in enumerate(model_ids)}
     ki = {r: i for i, r in enumerate(role_ids)}
     leaves, hists = {}, {}
-    for (path, ri, model, role), cell in acc.items():
+    for (path, day, model, role), cell in acc.items():
         v = leaves.get(path)
         if v is None:
-            v = leaves[path] = [[[[0, 0.0, 0.0] for _ in range(K)] for _ in range(M)] for _ in range(R)]
-            hists[path] = [[[{} for _ in range(K)] for _ in range(M)] for _ in range(R)]
-        c = v[ri][mi[model]][ki[role]]
-        c[0] += cell[0]
-        c[1] += cell[1]
-        c[2] += cell[2]
-    for (path, ri, model, role), bins in (hacc or {}).items():
-        _merge_bins(hists[path][ri][mi[model]][ki[role]], bins)
+            v = leaves[path] = {}
+            hists[path] = {}
+        key = (day, mi[model], ki[role])
+        c = v.get(key)
+        if c is None:
+            v[key] = [cell[0], cell[1], cell[2]]
+        else:
+            c[0] += cell[0]
+            c[1] += cell[1]
+            c[2] += cell[2]
+    for (path, day, model, role), bins in (hacc or {}).items():
+        _merge_bins(hists[path].setdefault((day, mi[model], ki[role]), {}), bins)
     root = {'children': {}}
     # Longer paths first, so a path that is a prefix of another becomes its "(direct)" child.
     for path, v in sorted(leaves.items(), key=lambda kv: (-len(kv[0]), kv[0])):
@@ -2904,11 +2941,9 @@ def build_tree(acc, range_ids, model_ids, role_ids, basis, top_files=FILE_TOP_N,
             node['children'][last]['children'][''] = leaf
         else:
             node['children'][last] = leaf
-    big = R - 1
-
     def total(n):
         if 'v' in n:
-            return sum(c[0] for row in n['v'][big] for c in row)
+            return sum(c[0] for c in n['v'].values())
         return sum(total(c) for c in n['children'].values())
 
     def leaf_cells(n):
@@ -2920,37 +2955,71 @@ def build_tree(acc, range_ids, model_ids, role_ids, basis, top_files=FILE_TOP_N,
         return out
 
     def merge(nodes):
-        v = [[[[0, 0.0, 0.0] for _ in range(K)] for _ in range(M)] for _ in range(R)]
-        h = [[[{} for _ in range(K)] for _ in range(M)] for _ in range(R)]
-        b = set()
+        v, h, b = {}, {}, set()
         for n in nodes:
             for lv, lb, lh in leaf_cells(n):
                 b |= lb
-                for r in range(R):
-                    for m in range(M):
-                        for k in range(K):
-                            for j in range(3):
-                                v[r][m][k][j] += lv[r][m][k][j]
-                            _merge_bins(h[r][m][k], lh[r][m][k])
+                for key, x in lv.items():
+                    c = v.get(key)
+                    if c is None:
+                        v[key] = list(x)
+                    else:
+                        for j in range(3):
+                            c[j] += x[j]
+                for key, bins in lh.items():
+                    _merge_bins(h.setdefault(key, {}), bins)
         return {'v': v, 'basis': b, 'h': h}
+
+    def cum_round(v):
+        """Unique tokens and dollars per (day, model, role) cell, rounded along the days so that every run of
+        consecutive days sums to within one unit of its raw total, and all days to the rounded total."""
+        out, run = {}, {}
+        for key in sorted(v, key=lambda k: (k[1], k[2], k[0])):
+            c, (u, d, ur, dr) = v[key], run.get(key[1:], (0.0, 0.0, 0, 0))
+            u, d = u + c[1], d + c[2]
+            nu, nd = round(u), round(round(d, 4) * 10 ** 4)
+            out[key] = [c[0], nu - ur, (nd - dr) / 10 ** 4]
+            run[key[1:]] = (u, d, nu, nd)
+        return out
 
     def round_split(vs, target_v=None):
         """Round the children's unique tokens and dollars so they add up to the rounded parent, the value the
-        unsplit leaf would serialize (largest remainder per cell), or to the already rounded target_v."""
-        for r in range(R):
-            for m in range(M):
-                for k in range(K):
-                    for j, scale in ((1, 1), (2, 10 ** 4)):
-                        xs = [v[r][m][k][j] * scale for v in vs]
-                        fl = [math.floor(x) for x in xs]
-                        # The target is what compact() would serialize for the unsplit leaf.
-                        total_ = sum(v[r][m][k][j] for v in vs) if target_v is None else target_v[r][m][k][j]
-                        target = round(total_) if j == 1 else round(round(total_, 4) * scale)
-                        extra = int(target) - sum(fl)
-                        for i in sorted(range(len(xs)), key=lambda i: fl[i] - xs[i])[:max(extra, 0)]:
-                            fl[i] += 1
-                        for v, x in zip(vs, fl):
-                            v[r][m][k][j] = x if j == 1 else x / scale
+        unsplit leaf would serialize (cum_round), or to the already rounded target_v. Each child carries its
+        rounding along the days, so its running total stays within two units of its raw running total, and its
+        row for a day with no negative value is never negative."""
+        zero = (0, 0.0, 0.0)
+        if target_v is None:
+            target_v = {}
+            for v in vs:
+                for key, x in v.items():
+                    t = target_v.setdefault(key, [0, 0.0, 0.0])
+                    for j in range(3):
+                        t[j] += x[j]
+            target_v = cum_round(target_v)
+        carry = {}
+        for key in sorted(set(target_v).union(*vs), key=lambda k: (k[1], k[2], k[0])):
+            for j, scale in ((1, 1), (2, 10 ** 4)):
+                raw, given = carry.setdefault((key[1:], j), ([0.0] * len(vs), [0] * len(vs)))
+                day = [v.get(key, zero)[j] * scale for v in vs]
+                for i, x in enumerate(day):
+                    raw[i] += x
+                xs = [r - g for r, g in zip(raw, given)]
+                fl = [math.floor(x) if d < 0 else max(math.floor(x), 0) for x, d in zip(xs, day)]
+                total_ = target_v.get(key, zero)[j]
+                target = round(total_) if j == 1 else round(round(total_, 4) * scale)
+                extra = int(target) - sum(fl)
+                for i in sorted(range(len(xs)), key=lambda i: fl[i] - xs[i])[:max(extra, 0)]:
+                    fl[i] += 1
+                for i in sorted(range(len(xs)), key=lambda i: (fl[i] <= 0, xs[i] - fl[i]))[:max(-extra, 0)]:
+                    fl[i] -= 1
+                for i, x in enumerate(fl):
+                    given[i] += x
+                for v, x in zip(vs, fl):
+                    if key not in v:
+                        if not x:
+                            continue
+                        v[key] = [0, 0.0, 0.0]
+                    v[key][j] = x if j == 1 else x / scale
 
     def round_leaves(n, target_v=None):
         """Rounds every leaf under an internal node, which once was one leaf, to that leaf's rounded value."""
@@ -2969,10 +3038,11 @@ def build_tree(acc, range_ids, model_ids, role_ids, basis, top_files=FILE_TOP_N,
         if 'v' in n:
             if not label:
                 label = 'Other output' if len(path) > 2 and is_cmd_group(path[:-2]) else '%s (direct)' % parent_label
+            cells = cum_round(n['v'])
             leaf = {'id': nid, 'label': label, 'basis': ' + '.join(sorted(n['basis'])) or B_EST,
-                    'v': compact(n['v'])}
+                    'v': compact(cells, n['h'])}
             if hacc is not None:
-                leaf['h'] = compact_hist(n['h'], n['v'])
+                leaf['h'] = compact_hist(n['h'], cells)
             if len(path) > 1 and is_explicit_group(path[:-1]) and label != SEVERAL_FILES and not label.startswith('Other ('):
                 leaf['xf'] = label
             if len(path) > 1 and is_file_group(path[:-1]) and not label.startswith('Other ('):
@@ -3011,35 +3081,31 @@ def build_tree(acc, range_ids, model_ids, role_ids, basis, top_files=FILE_TOP_N,
             node['fl'] = label
         return node
 
-    def compact(v):
-        out = []
-        for r in v:
-            rr = []
-            for m in r:
-                mm = [None if not (c[0] or c[1] or c[2]) else [int(c[0]), int(round(c[1])), round(c[2], 4)] for c in m]
-                rr.append(mm if any(mm) else None)
-            out.append(rr if any(rr) else None)
-        return out
+    def kept(v, h):
+        return [k for k in sorted(v) if v[k][0] or round(v[k][1]) or round(v[k][2], 4)
+                or any(b[0] for b in h.get(k, {}).values())]
+
+    def compact(v, h):
+        return [[*k, int(v[k][0]), int(round(v[k][1])), round(v[k][2], 4)] for k in kept(v, h)]
 
     def compact_hist(h, v):
-        """[range][model][role] -> [[bin, occurrences, billed, unique, usd], ...] or None. Unique tokens and
-        dollars are rounded (largest remainder) to add up to the cell compact() serializes; billed is exact."""
-        out = []
-        for hr, vr in zip(h, v):
-            rr = []
-            for hm, vm in zip(hr, vr):
-                mm = []
-                for bins, c in zip(hm, vm):
-                    keys = sorted(b for b, x in bins.items() if any(x))
-                    if not keys:
-                        mm.append(None)
-                        continue
-                    us = apportion([max(0.0, bins[b][2]) for b in keys], int(round(c[1])))
-                    ds = apportion([max(0.0, bins[b][3]) for b in keys], int(round(round(c[2], 4) * 10 ** 4)))
-                    mm.append([[b, bins[b][0], bins[b][1], u, round(d / 10 ** 4, 4)] for b, u, d in zip(keys, us, ds)])
-                rr.append(mm if any(mm) else None)
-            out.append(rr if any(rr) else None)
-        return out
+        """Per compact() cell, [[bin, occurrences, billed, unique, usd], ...]. Unique tokens and dollars are
+        rounded (largest remainder) to add up to the cell compact() serializes; billed is exact. A cell with no
+        calls of its own, which a split leaf's carried rounding can give tokens, uses the bins of its (model,
+        role) pair's latest earlier day with calls, with no occurrences or billed tokens."""
+        out, last = [], {}
+        for key in sorted(kept(v, h), key=lambda k: (k[1], k[2], k[0])):
+            bins, c = h.get(key, {}), v[key]
+            keys = sorted(b for b, x in bins.items() if any(x))
+            if keys:
+                last[key[1:]] = bins
+            elif key[1:] in last:
+                bins = {b: [0, 0, x[2], x[3]] for b, x in last[key[1:]].items()}
+                keys = sorted(b for b, x in bins.items() if any(x))
+            us = apportion([max(0.0, bins[b][2]) for b in keys], int(round(c[1])))
+            ds = apportion([max(0.0, bins[b][3]) for b in keys], int(round(round(c[2], 4) * 10 ** 4)))
+            out.append((key, [[b, bins[b][0], bins[b][1], u, round(d / 10 ** 4, 4)] for b, u, d in zip(keys, us, ds)]))
+        return [x for _, x in sorted(out)]
 
     return emit('All tokens', root, (), '')['children']
 
@@ -3054,20 +3120,17 @@ def _merge_bins(into, bins):
                 c[j] += x[j]
 
 
-def leaf_sums(tree, R, M, K):
-    """Billed leaf sums per [range][model][role]."""
-    s = [[[0] * K for _ in range(M)] for _ in range(R)]
+def leaf_sums(tree):
+    """Billed leaf sums: {(day, model index, role index): tokens}."""
+    s = defaultdict(int)
 
     def walk(n):
         if 'children' in n:
             for c in n['children']:
                 walk(c)
             return
-        for r, row in enumerate(n['v']):
-            for m, mm in enumerate(row or []):
-                for k, c in enumerate(mm or []):
-                    if c:
-                        s[r][m][k] += c[0]
+        for d, m, k, b, _, _ in n['v']:
+            s[(d, m, k)] += b
     for n in tree:
         walk(n)
     return s
@@ -3130,7 +3193,7 @@ def oracle_file(job):
 
 
 def run_oracle(jobs, windows, results):
-    """Sums logged usage per (range index, model, role). Duplicate call keys across files count once
+    """Sums logged usage per (day index, model, role). Duplicate call keys across files count once
     (first file in sorted order wins)."""
     out, seen, dup_keys, unreadable = defaultdict(int), set(), 0, 0
     for (role, calls, bad) in results:
@@ -3140,22 +3203,28 @@ def run_oracle(jobs, windows, results):
                 dup_keys += 1
                 continue
             seen.add(key)
-            for ri, (a, b) in enumerate(windows):
-                if ts is not None and a <= ts < b and n:
-                    out[(ri, model_id(raw_model), role)] += n
+            for d in window_hits(windows, ts) if n else ():
+                out[(d, model_id(raw_model), role)] += n
     return out, {'calls': len(seen), 'cross_file_duplicate_keys': dup_keys, 'unreadable_files': unreadable}
 
 
-def compare_oracle(oracle, sums, range_ids, model_ids, role_ids):
-    rows = []
-    keys = {(ri, m, k) for (ri, m, k) in oracle} | {
-        (ri, model_ids[mi], role_ids[ki]) for ri in range(len(range_ids)) for mi in range(len(model_ids))
-        for ki in range(len(role_ids)) if sums[ri][mi][ki]}
-    for ri, m, k in sorted(keys, key=lambda x: (x[0], x[1], x[2])):
-        leaf = sums[ri][model_ids.index(m)][role_ids.index(k)] if m in model_ids else 0
-        rows.append({'range': range_ids[ri], 'model': m, 'role': k, 'oracle': oracle.get((ri, m, k), 0),
-                     'leaf_sum': leaf, 'diff': leaf - oracle.get((ri, m, k), 0)})
-    return rows
+def compare_oracle(oracle, sums, days, model_ids, role_ids):
+    """Rows per (model, role) over all days, and the (day, model, role) cells where the two sums differ."""
+    cells = defaultdict(lambda: [0, 0])
+    for key, n in oracle.items():
+        cells[key][0] += n
+    for (d, mi, ki), n in sums.items():
+        cells[(d, model_ids[mi], role_ids[ki])][1] += n
+    totals, bad = defaultdict(lambda: [0, 0]), []
+    for (d, m, k), (o, leaf) in sorted(cells.items()):
+        t = totals[(m, k)]
+        t[0] += o
+        t[1] += leaf
+        if o != leaf:
+            bad.append({'day': days.iso(d), 'model': m, 'role': k, 'oracle': o, 'leaf_sum': leaf, 'diff': leaf - o})
+    rows = [{'model': m, 'role': k, 'oracle': o, 'leaf_sum': leaf, 'diff': leaf - o}
+            for (m, k), (o, leaf) in sorted(totals.items())]
+    return rows, bad
 
 
 # ---------------------------------------------------------------- main
@@ -3178,16 +3247,15 @@ def run(args, progress=None):
             raise SystemExit('--end: not an ISO 8601 time: %r' % args.end)
     else:
         end = datetime.datetime.now()
-    # "today" is the local calendar day of --end, whatever offset --end was written in.
+    # Days are local calendar days, whatever offset --end was written in; the last one holds --end.
     end = end.astimezone()
     end_ts = end.timestamp()
-    day0 = end.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    # The longest range keeps id '30d' (the dashboard's default) whatever --lookback is.
-    ranges = [('today', 'Today', day0), ('7d', '7 days', end_ts - 7 * 86400),
-              ('30d', '%d days' % args.lookback, end_ts - args.lookback * 86400)]
-    windows = [(a, end_ts) for _, _, a in ranges]
-    min_mtime = min(a for a, _ in windows)
-    jobs = discover(args.claude_root, args.codex_root, min_mtime)
+    last = end.date()
+    if args.lookback is None:
+        start_ts = float('-inf')
+    else:
+        start_ts = local_midnight(last - datetime.timedelta(days=max(args.lookback, 1) - 1))
+    jobs = discover(args.claude_root, args.codex_root, max(start_ts, 0))
     stats = Stats()
     sessions = []
     workers = args.jobs or min(8, os.cpu_count() or 1)
@@ -3202,8 +3270,13 @@ def run(args, progress=None):
             o_results = list(_tracked(ex.map(oracle_file, jobs, chunksize=4), len(jobs), 'check', progress))
     else:
         o_results = list(_tracked(map(oracle_file, jobs), len(jobs), 'check', progress))
-    oracle, oracle_stats = run_oracle(jobs, windows, o_results)
     t_oracle = time.time() - t_oracle
+    stamps = [e[1] for sess, _ in results if sess for e in sess['events'] if e[0] == 'C' and e[1] is not None]
+    stamps += [ts for _, calls, _ in o_results for ts, _, _ in calls.values() if ts is not None]
+    first = min([datetime.date.fromtimestamp(ts) for ts in stamps if start_ts <= ts < end_ts]
+                + [last - datetime.timedelta(days=MIN_DAYS - 1)])
+    windows = Days(first, last, start_ts, end_ts)
+    oracle, oracle_stats = run_oracle(jobs, windows, o_results)
     for (src, _p, _s), (sess, st) in zip(jobs, results):
         stats.inc('%s_files' % src)
         for k, v in st.items():
@@ -3225,20 +3298,25 @@ def run(args, progress=None):
     models_seen = sorted({k[2] for k in acc} | {m for _, m in recon})
     model_ids = [m for m in PRIMARY_MODELS] + [m for m in models_seen if m not in PRIMARY_MODELS]
     role_ids = role_order({k[3] for k in acc} | {k[2] for k in oracle} | {s['role'] for s in sessions})
-    range_ids = [r for r, _, _ in ranges]
-    tree = build_tree(acc, range_ids, model_ids, role_ids, basis, args.top_files, getattr(args, 'top_commands', CMD_TOP_N),
+    tree = build_tree(acc, model_ids, role_ids, basis, args.top_files, getattr(args, 'top_commands', CMD_TOP_N),
                       hacc)
-    sums = leaf_sums(tree, len(range_ids), len(model_ids), len(role_ids))
-    reconciliation = []
-    for ri, rid in enumerate(range_ids):
-        for mi, m in enumerate(model_ids):
-            logged, leaf = recon.get((ri, m), 0), sum(sums[ri][mi])
-            if logged or leaf:
-                reconciliation.append({'range': rid, 'model': m, 'logged_total': logged, 'leaf_sum': leaf,
-                                       'diff': leaf - logged})
-    oracle_rows = compare_oracle(oracle, sums, range_ids, model_ids, role_ids)
-    oracle_bad = [r for r in oracle_rows if r['diff']]
-    big = len(ranges) - 1
+    sums = leaf_sums(tree)
+    by_day = defaultdict(lambda: [0, 0])
+    for (d, m), n in recon.items():
+        by_day[(d, m)][0] += n
+    for (d, mi, _), n in sums.items():
+        by_day[(d, model_ids[mi])][1] += n
+    rec_totals, rec_bad = defaultdict(lambda: [0, 0]), []
+    for (d, m), (logged, leaf) in sorted(by_day.items()):
+        t = rec_totals[m]
+        t[0] += logged
+        t[1] += leaf
+        if logged != leaf:
+            rec_bad.append({'day': windows.iso(d), 'model': m, 'logged_total': logged, 'leaf_sum': leaf,
+                            'diff': leaf - logged})
+    reconciliation = [{'model': m, 'logged_total': rec_totals[m][0], 'leaf_sum': rec_totals[m][1],
+                       'diff': rec_totals[m][1] - rec_totals[m][0]} for m in model_ids if m in rec_totals]
+    oracle_rows, oracle_bad = compare_oracle(oracle, sums, windows, model_ids, role_ids)
     unpriced = sorted(m for m in models_seen if m not in PRICING)
     unpriced_calls = {m: counters['unpriced_calls:' + m] for m in unpriced}
     n_unpriced = sum(unpriced_calls.values())
@@ -3254,8 +3332,8 @@ def run(args, progress=None):
     meta = {
         'generated': gen.isoformat(timespec='seconds'),
         'end': end.isoformat(timespec='seconds'),
-        'windows': {rid: datetime.datetime.fromtimestamp(a).astimezone().isoformat(timespec='seconds')
-                    for (rid, _, a) in ranges},
+        'collected_from': None if args.lookback is None else
+        datetime.datetime.fromtimestamp(start_ts).astimezone().isoformat(timespec='seconds'),
         'pill': '%s · generated %s' % (' + '.join(srcs) or 'No sources', gen.strftime('%Y-%m-%d %H:%M')),
         'pillTitle': '%d Claude files, %d Codex files, %d sessions, %d calls in range. Context split estimated at %s chars/token (Claude) and %s (Codex); see meta.reconciliation.' % (
             stats.get('claude_files', 0), stats.get('codex_files', 0), len(sessions), counters['calls_in_range'],
@@ -3268,7 +3346,7 @@ def run(args, progress=None):
         'pricing_fetched': PRICING_FETCHED,
         'cache_write_multipliers_anthropic': CACHE_WRITE_MULT,
         'unpriced_models': unpriced,
-        'unpriced_calls_%s' % range_ids[big]: unpriced_calls,
+        'unpriced_calls': unpriced_calls,
         'coverageNote': coverage,
         'counts': dict(sorted(stats.items())),
         'sessions_by_role': dict(sorted(sess_by.items())),
@@ -3279,9 +3357,10 @@ def run(args, progress=None):
         'size_bin_edges': list(HIST_EDGES),
         'size_bin_fallbacks': counters['hist_fallback'],
         'reconciliation': reconciliation,
-        'reconciled': all(r['diff'] == 0 for r in reconciliation),
+        'reconciliation_mismatches': rec_bad,
+        'reconciled': not rec_bad,
         'oracle': {
-            'method': 'Separate minimal re-read of every log: usage fields summed per (range, model, role), '
+            'method': 'Separate minimal re-read of every log: usage fields summed per (day, model, role), '
                       'deduplicated by message.id / response_id (token_count: repeated totals skipped).',
             'policy': 'Same role regex and model aliases as the parser. Duplicate call keys across files '
                       'count once in the oracle but once per file in the parser; a nonzero '
@@ -3296,7 +3375,7 @@ def run(args, progress=None):
     }
     data = {
         'meta': meta,
-        'ranges': [{'id': r, 'label': l} for r, l, _ in ranges],
+        'days': {'first': first.isoformat(), 'last': last.isoformat(), 'count': len(windows)},
         'models': [{'id': m, 'label': MODEL_LABELS.get(m, m), 'provider': model_provider(m)} for m in model_ids],
         'roles': [{'id': r, 'label': role_label(r)} for r in role_ids],
         'tree': tree,
@@ -3323,8 +3402,9 @@ def main(argv=None, progress=None):
     ap.add_argument('--out', default=os.path.join(here, '..', 'token-data.json'))
     ap.add_argument('--html', default=None, help='write the dashboard HTML here')
     ap.add_argument('--template', default=os.path.join(here, 'template.html'))
-    ap.add_argument('--end', default=None, help='range end, ISO time (default: now, local time)')
-    ap.add_argument('--lookback', type=int, default=30, help='longest range in days (default 30)')
+    ap.add_argument('--end', default=None, help='calls at or after this ISO time are left out (default: now)')
+    ap.add_argument('--lookback', type=int, default=None,
+                    help='read only the last N local calendar days up to --end (default: all history)')
     ap.add_argument('--claude-root', default=CLAUDE_ROOT)
     ap.add_argument('--codex-root', default=CODEX_ROOT)
     ap.add_argument('--jobs', type=int, default=0, help='parser processes (default: min(8, CPUs))')
@@ -3337,7 +3417,7 @@ def main(argv=None, progress=None):
     args = ap.parse_args(argv)
     data = run(args, progress)
     m = data['meta']
-    bad = m['oracle']['mismatches'] + [r for r in m['reconciliation'] if r['diff']]
+    bad = m['oracle']['mismatches'] + m['reconciliation_mismatches']
     for r in bad:
         print('MISMATCH %s' % json.dumps(r), file=sys.stderr)
     if bad and not args.allow_mismatch:
