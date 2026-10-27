@@ -1,0 +1,43 @@
+README.md
+  s_a6c08bbecd5ff3::t_b766c4a0b1bd24 3,45,65-66
+collector/README.md
+  s_68f3ac55e73d39::t_0aad016d9cf374 15-16,32,36,38,40-56,84,114,163,184
+collector/collect.py
+  s_defd9f45cb4620::t_5fa2dec2874681 67,74,135,137,2600-2631,2633-2635,2694,2744,2911-2913,2917,2920-2931,2946,2958,2962-2970,2973-2984,2987-3022,3041,3043,3045,3084-3089,3092-3108,3123-3125,3132-3133,3196,3206-3207,3211-3227,3250,3253-3258,3274-3279,3301,3303-3319,3335-3336,3349,3360-3361,3363,3378,3405-3407,3420
+collector/template.html
+  s_a6c08bbecd5ff3::t_96d32ad49e34ea 69-86,147-160,193-197,201-209,213,223,259-267,279-280,282,286-289,402,467,469,474-482,527,644-677
+collector/test_collect.py
+  s_defd9f45cb4620::t_9bf1fcc8db30e4 300,316-317,319-326,330-334,377-412,462,471-484,487-488,492-493,508-509,526-527,532-534,545-546,556,566-756,774,782-784,788-792,923,926,929,934,937,1706,1712-1713,1720,1733-1734,1745,1747,1898,1917-1918,1921,2500-2527,2590,2593-2594,2600-2611
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "beeaa0e27a91e499250404252c222195d02391ec",
+  "prompts": {},
+  "sessions": {
+    "s_68f3ac55e73d39": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17890-1ec5-7cd2-8a4f-448b52858211",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Filip Kalný <filip.kalny@gooddata.com>"
+    },
+    "s_a6c08bbecd5ff3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "264b0bfa-42a9-474c-9273-54575e657ddc",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Filip Kalný <filip.kalny@gooddata.com>"
+    },
+    "s_defd9f45cb4620": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3da4f3a6-f789-4eef-843a-2ca4ccc0247f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Filip Kalný <filip.kalny@gooddata.com>"
+    }
+  }
+}
