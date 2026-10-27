@@ -683,7 +683,7 @@ function trackAt() {
 function hitAt(t, x, touch) {
   const reach = t.th / 2 + (touch ? 10 : 3);
   const df = Math.abs(x - t.x(state.from)), dt = Math.abs(x - t.x(state.to));
-  if (Math.min(df, dt) <= reach) return Math.abs(df - dt) < 4 ? 'both' : df < dt ? 'from' : 'to';
+  if (Math.min(df, dt) <= reach) return state.from === state.to ? 'both' : df < dt ? 'from' : 'to';
   const p = t.pos(x);
   return p < state.from ? 'from-track' : p > state.to ? 'to-track' : 'band';
 }
