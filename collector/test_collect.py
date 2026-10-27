@@ -1012,12 +1012,12 @@ class PerFileEndToEnd(unittest.TestCase):
         for text in ('Follow any AGENTS.md files in the repository.\n' + 'd' * 200,
                      'Read the AGENTS.md instructions for /Users/someone/proj before editing.\n' + 'd' * 200,
                      'AGENTS.md scope rules\n' + c.PROJECT_DOC_SEP + '\n' + 'd' * 50):
-            self.assertEqual(run(text), [((c.INSTR, 'Developer messages'), len(text))])
+            self.assertEqual(run(text), [(c.P_DEV, len(text))])
         # the anchored wrapper is still a file, the trailing text stays a developer message
         doc = '# AGENTS.md instructions for /Users/someone/proj\n\n<INSTRUCTIONS>\n' + 'p' * 80 + '\n</INSTRUCTIONS>'
         tail = '\n' + 'd' * 40
         self.assertEqual(run(doc + tail), [((c.INSTR, 'AGENTS.md instructions'), len(doc), ('~/proj/AGENTS.md', c.HOW_LAUNCH)),
-                                           ((c.INSTR, 'Developer messages'), len(tail))])
+                                           (c.P_DEV, len(tail))])
 
 
 class EntryMethods(unittest.TestCase):
@@ -2621,6 +2621,148 @@ class Histogram(unittest.TestCase):
         finally:
             shutil.rmtree(e2e.tmp, ignore_errors=True)
 
+
+class AgentMessages(unittest.TestCase):
+    BRIEF = '<task-brief>\nGoal:\nfix it\n</task-brief>'
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def claude_blocks(self, lines, is_sub=False):
+        p = os.path.join(self.tmp, 'a.jsonl')
+        write_jsonl(p, lines)
+        sess, _ = c.parse_claude(p, is_sub)
+        out = defaultdict(int)
+        for e in sess['events']:
+            if e[0] == 'B':
+                out[e[1]] += e[2]
+        return dict(out)
+
+    def notif(self, tid):
+        return ('<task-notification><task-id>x</task-id><tool-use-id>%s</tool-use-id><status>completed</status>'
+                '<summary>done</summary><result>%s</result></task-notification>' % (tid, 'r' * 30))
+
+    def calls(self, *tools):
+        o = claude_asst('m1', 2, 10, 0, 0, 5)
+        o['message']['content'] = [{'type': 'tool_use', 'id': cid, 'name': name, 'input': {'prompt': 'p'}}
+                                   for cid, name in tools]
+        return o
+
+    def test_brief_after_role_profile_is_agent_message(self):
+        profile = ROLE_TAG % 'drone'
+        for sep in ('', '\n\n'):
+            text = profile + sep + self.BRIEF
+            self.assertEqual(c.split_text(text, 'Typed prompts'),
+                             [((c.INSTR, 'Subagent role profile', 'Drone'), len(profile)),
+                              (c.P_BRIEF, len(sep + self.BRIEF))])
+        rem = '<system-reminder>' + 'r' * 20 + '</system-reminder>'
+        parts = dict(c.split_text(rem + profile + self.BRIEF + '\nlater', 'Typed prompts'))
+        self.assertEqual(parts[c.P_BRIEF], len(self.BRIEF))
+        self.assertEqual(parts[(c.USER, 'Typed prompts')], len('\nlater'))
+        self.assertEqual(parts[(c.INSTR, 'Subagent role profile', 'Drone')], len(profile))
+
+    def test_brief_without_anchor_stays_with_sender_text(self):
+        profile = ROLE_TAG % 'envoy'
+        for text in (self.BRIEF,
+                     'Please write a <task-brief> for the agent, developer; Goal: ship',
+                     profile + 'Note first.\n' + self.BRIEF,
+                     profile + '<task-brief>\nGoal: never closed',
+                     'Tell the subagent to delegate_task the developer message to another agent.'):
+            parts = c.split_text(text, 'Typed prompts')
+            self.assertNotIn(c.P_BRIEF, dict(parts), text)
+            self.assertEqual(sum(n for _, n in parts), len(text))
+        # a role profile alone stays an instruction, never a delivered brief
+        self.assertEqual(c.split_text(profile, 'Typed prompts'),
+                         [((c.INSTR, 'Subagent role profile', 'Envoy'), len(profile))])
+        pasted = '<pasted_content>' + profile + self.BRIEF + '</pasted_content>'
+        self.assertEqual(c.split_text(pasted, 'Typed prompts'), [((c.USER, 'Pasted content'), len(pasted))])
+
+    def test_codex_brief_and_role(self):
+        p = os.path.join(self.tmp, 'r.jsonl')
+        lines = codex_lines(1)
+        text = ROLE_TAG % 'drone' + '\n' + self.BRIEF
+        lines[2]['payload']['content'] = [{'type': 'input_text', 'text': text}]
+        write_jsonl(p, lines)
+        sess, _ = c.parse_codex(p)
+        self.assertEqual(sess['role'], 'drone')
+        got = [(e[1], e[2]) for e in sess['events'] if e[0] == 'B' and e[1][0] in (c.AGENTMSG, c.USER)]
+        self.assertEqual(got, [(c.P_BRIEF, len('\n' + self.BRIEF))])
+
+    def test_codex_developer_and_agent_items_stay_put(self):
+        def run(item):
+            events, pending = [], []
+            c._codex_item(item, events, {}, pending)
+            return [(e[1], e[2]) for e in events], [(x[0], x[1]) for x in pending]
+        dev = '<multi_agent_role>You are a worker agent; the developer sends task briefs.</multi_agent_role>'
+        self.assertEqual(run({'type': 'message', 'role': 'developer', 'content': [{'type': 'input_text', 'text': dev}]}),
+                         ([(c.P_DEV, len(dev))], []))
+        mine = ROLE_TAG % 'drone' + self.BRIEF
+        self.assertEqual(run({'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': mine}]}),
+                         ([], [(c.P_TEXT, len(mine))]))
+        # self-addressed agent_message items are not proven inter-agent deliveries
+        am = {'type': 'agent_message', 'author': '/root', 'recipient': '/root',
+              'content': [{'type': 'input_text', 'text': 'Message Type: MESSAGE\nSender: /root\nPayload: x'}]}
+        self.assertEqual(run(am), ([(c.P_NOTIF, len(am['content'][0]['text']))], []))
+
+    def test_claude_notifications_split_by_launching_tool(self):
+        a, b, unknown = self.notif('tA'), self.notif('tB'), self.notif('tZ')
+        got = self.claude_blocks([claude_user('go', 3), self.calls(('tA', 'Agent'), ('tB', 'Bash')),
+                                  claude_user(a + b + unknown, 1), claude_asst('m2', 1, 10, 0, 0, 5)])
+        self.assertEqual(got[c.P_AGENT_NOTIF], len(a))
+        self.assertEqual(got[c.P_NOTIF], len(b) + len(unknown))
+        mcp = self.claude_blocks([claude_user('go', 3), self.calls(('tA', 'mcp__srv__Agent')),
+                                  claude_user(a, 1), claude_asst('m2', 1, 10, 0, 0, 5)])
+        self.assertNotIn(c.P_AGENT_NOTIF, mcp)
+
+    def test_claude_queued_commands(self):
+        def queued(mode, prompt, origin=None):
+            att = {'type': 'queued_command', 'commandMode': mode, 'prompt': prompt}
+            if origin:
+                att['origin'] = origin
+            return {'type': 'attachment', 'timestamp': ts(1), 'attachment': att,
+                    'rendered': [{'content': 'x' * 50}]}
+        got = self.claude_blocks([claude_user('go', 3), self.calls(('tA', 'Agent'), ('tB', 'Bash')),
+                                  queued('task-notification', self.notif('tA')),
+                                  queued('task-notification', self.notif('tB')),
+                                  queued('prompt', 'agent: ' + self.notif('tA')),
+                                  queued('prompt', 'hi', {'kind': 'peer', 'from': 'sess-2', 'senderTaskId': 't'}),
+                                  claude_asst('m2', 1, 10, 0, 0, 5)])
+        self.assertEqual(got[c.P_AGENT_NOTIF], 50)
+        self.assertEqual(got[c.P_NOTIF], 50)
+        self.assertEqual(got[c.P_PEER], 50)
+        self.assertEqual(got[(c.USER, 'Typed prompts')], len('go') + 50)
+
+    def test_claude_peer_origin(self):
+        def user(origin, meta=False):
+            o = claude_user('<agent-message>hello</agent-message>', 1)
+            o['origin'] = origin
+            if meta:
+                o['isMeta'] = True
+            return o
+        n = len('<agent-message>hello</agent-message>')
+        for origin, meta, want in (({'kind': 'peer', 'from': 'sess-2', 'senderTaskId': 't'}, True, c.P_PEER),
+                                   ({'kind': 'peer', 'from': 'sess-2'}, False, c.P_PEER),
+                                   ({'kind': 'peer'}, False, (c.USER, 'Typed prompts')),
+                                   ({'kind': 'human'}, False, (c.USER, 'Typed prompts'))):
+            got = self.claude_blocks([user(origin, meta), claude_asst('m1', 1, 10, 0, 0, 5)])
+            self.assertEqual(got.get(want), n, origin)
+
+    def test_native_subagent_prompt_is_brief_and_own_output_is_not(self):
+        lines = [claude_user('Find the callers of foo', 2), claude_asst('m1', 2, 10, 0, 0, 5, text='brief: done'),
+                 claude_user('[Request interrupted by user]', 1), claude_asst('m2', 1, 10, 0, 0, 5)]
+        sub = self.claude_blocks(lines, is_sub=True)
+        top = self.claude_blocks(lines)
+        interrupted = len('[Request interrupted by user]')
+        self.assertEqual(sub[c.P_BRIEF], top[(c.USER, 'Typed prompts')] - interrupted)
+        self.assertEqual(sub[(c.USER, 'Typed prompts')], interrupted)
+        self.assertNotIn(c.P_BRIEF, top)
+        self.assertEqual(sum(sub.values()), sum(top.values()))
+
+    def test_agent_messages_sit_after_user_messages(self):
+        self.assertEqual(c.TOP_ORDER.index(c.AGENTMSG), c.TOP_ORDER.index(c.USER) + 1)
 
 if __name__ == '__main__':
     unittest.main()

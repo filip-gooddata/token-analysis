@@ -96,25 +96,36 @@ PROFILE_SPAN_RE = re.compile(ROLE_TAG + r'.*?</t3-subagent-profile>', re.S)
 SYSREM_RE = re.compile(r'<system-reminder>.*?</system-reminder>', re.S)
 PASTE_RE = re.compile(r'<pasted_content\b.*?</pasted_content>', re.S)
 NOTIF_RE = re.compile(r'<task-notification>.*?</task-notification>', re.S)
+NOTIF_TOOL_RE = re.compile(r'<tool-use-id>([^<\s]+)</tool-use-id>')
+# A T3 task brief counts as delivered only directly after a role profile span.
+BRIEF_RE = re.compile(r'\s*<task-brief>.*?</task-brief>', re.S)
 ENVCTX_RE = re.compile(r'<environment_context>.*?</environment_context>', re.S)
 PERM_RE = re.compile(r'<permissions instructions>.*?</permissions instructions>', re.S)
 COMPACT_PREFIX = 'This session is being continued from a previous conversation'
+INTERRUPTED = '[Request interrupted by user'
 T3_MARKERS = [('## T3 Code orchestration', 'Orchestration guidance'),
               ('<pull_request_linking>', 'PR linking'),
               ('### Showing visuals', 'Visuals / HTML guidance'),
               ('<runtime_info>', 'Runtime info')]
 SUBAGENT_TOOLS = {'Agent', 'Task', 'TaskOutput', 't3-code:delegate_task', 't3-code:task_status',
                   't3-code:t3_thread_wait', 't3-code:t3_thread_read', 'collaboration.wait_agent'}
+AGENT_TOOLS = {'Agent', 'Task'}
 
 # Category paths (top level keeps the dashboard's existing categories).
 INSTR, TOOLCTX, CALLS, RESULTS, USER, ASSIST, SUBRES = (
     'Agent instructions', 'Tool context', 'Tool calls', 'Tool results', 'User messages',
     'Assistant output', 'Subagent results')
+AGENTMSG = 'Agent messages'
 UNATTRIB = ('Unattributed prefix',)
+P_BRIEF = (AGENTMSG, 'Task briefs')
+P_AGENT_NOTIF = (AGENTMSG, 'Completion notifications')
+P_PEER = (AGENTMSG, 'Peer messages')
+P_NOTIF = (USER, 'Task / subagent notifications')
+P_DEV = (INSTR, 'Developer-role instructions')
 READ_RESULT = (RESULTS, 'Built-in tools', 'Read')
 P_THINK = (ASSIST, 'Thinking')
 P_TEXT = (ASSIST, 'Visible text')
-TOP_ORDER = [INSTR, TOOLCTX, CALLS, RESULTS, USER, ASSIST, SUBRES, UNATTRIB[0]]
+TOP_ORDER = [INSTR, TOOLCTX, CALLS, RESULTS, USER, AGENTMSG, ASSIST, SUBRES, UNATTRIB[0]]
 
 # Basis labels shown in tooltips.
 B_EST = 'estimated (chars/token)'
@@ -1968,25 +1979,39 @@ def sp_section_label(sec, idx):
     return 'Harness guidance'
 
 
-def split_text(text, kind):
-    """Classify a user-visible text block. Returns [(path, chars)] covering len(text)."""
+def notif_path(block, tool_names=None):
+    """An agent's completion notification when its tool-use id names an Agent/Task call, else the generic one."""
+    m = NOTIF_TOOL_RE.search(block)
+    t = (tool_names or {}).get(m.group(1)) if m else None
+    return P_AGENT_NOTIF if t and t[0] is None and t[1] in AGENT_TOOLS else P_NOTIF
+
+
+def split_text(text, kind, tool_names=None):
+    """Classify a user-visible text block. kind is a User messages label or a full path for the
+    remaining text. Returns [(path, chars)] covering len(text)."""
     out, rest = [], text
     for rx, path in ((SYSREM_RE, (USER, 'System reminders')), (PASTE_RE, (USER, 'Pasted content')),
-                     (NOTIF_RE, (USER, 'Task / subagent notifications')),
+                     (NOTIF_RE, None),
                      (ENVCTX_RE, (INSTR, 'Environment context')),
                      (PERM_RE, (INSTR, 'Codex permissions'))):
-        n = sum(len(m.group(0)) for m in rx.finditer(rest))
-        if n:
-            out.append((path, n))
+        found = {}
+        for m in rx.finditer(rest):
+            p = path or notif_path(m.group(0), tool_names)
+            found[p] = found.get(p, 0) + len(m.group(0))
+        if found:
+            out.extend(found.items())
             rest = rx.sub('', rest)
     m = ROLE_RE.search(rest)
     if m:
         span = PROFILE_SPAN_RE.match(rest, m.start())
         n = len(span.group(0)) if span else len(rest)
         out.append(((INSTR, 'Subagent role profile', role_label(m.group(1))), n))
-        rest = rest[:span.start()] + rest[span.end():] if span else ''
+        brief = BRIEF_RE.match(rest, span.end()) if span else None
+        if brief:
+            out.append((P_BRIEF, len(brief.group(0))))
+        rest = rest[:span.start()] + rest[(brief or span).end():] if span else ''
     if rest.strip():
-        out.append(((USER, kind), len(rest)))
+        out.append((kind if isinstance(kind, tuple) else (USER, kind), len(rest)))
     return out
 
 
@@ -2046,10 +2071,10 @@ def parse_claude(path, is_sub):
             st.inc('compactions')
             continue
         if t == 'attachment':
-            _claude_attachment(o, events, deferred_sizes, st)
+            _claude_attachment(o, events, deferred_sizes, st, tool_names)
             continue
         if t == 'user':
-            _claude_user(o, m, events, tool_names, deferred_sizes)
+            _claude_user(o, m, events, tool_names, deferred_sizes, is_sub)
             continue
         if t != 'assistant':
             continue
@@ -2121,7 +2146,12 @@ def _content_blocks(recs, idxs):
     return out
 
 
-def _claude_user(o, m, events, tool_names, deferred_sizes):
+def is_peer(origin):
+    """Claude Code marks a message another agent sent to this session with origin kind 'peer' and its sender."""
+    return isinstance(origin, dict) and origin.get('kind') == 'peer' and bool(origin.get('from'))
+
+
+def _claude_user(o, m, events, tool_names, deferred_sizes, is_sub=False):
     content = m.get('content')
     if o.get('isCompactSummary') or (isinstance(content, str) and content.startswith(COMPACT_PREFIX)):
         events.append(('B', (USER, 'Compaction summaries'), chars_of(content), 0, B_EST))
@@ -2131,19 +2161,24 @@ def _claude_user(o, m, events, tool_names, deferred_sizes):
         # report thinkingBlocksSent=1), so drop carried thinking from the replayed context.
         events.append(('T',))
     kind = 'Typed prompts'
-    if o.get('isMeta'):
+    if is_peer(o.get('origin')):
+        kind = P_PEER
+    elif o.get('isMeta'):
         kind = 'Skill / command content'
+    elif is_sub and not _text_only(content).startswith(INTERRUPTED):
+        # a native subagent's typed turns are the prompts its parent agent sent
+        kind = P_BRIEF
     blocks = [content] if isinstance(content, str) else (content or [])
     for c in blocks:
         if isinstance(c, str):
-            for p, n in split_text(c, kind):
+            for p, n in split_text(c, kind, tool_names):
                 events.append(('B', p, n, 0, B_EST))
             continue
         if not isinstance(c, dict):
             continue
         ct = c.get('type')
         if ct == 'text':
-            for p, n in split_text(c.get('text') or '', kind):
+            for p, n in split_text(c.get('text') or '', kind, tool_names):
                 events.append(('B', p, n, 0, B_EST))
         elif ct == 'image':
             events.append(('B', (USER, 'Images'), 0, IMAGE_TOKENS, B_IMG))
@@ -2165,7 +2200,7 @@ def _claude_user(o, m, events, tool_names, deferred_sizes):
             events.append(('B', result_path(srv, tl), chars_of(rc), 0, B_EST, *cmd))
 
 
-def _claude_attachment(o, events, deferred_sizes, st):
+def _claude_attachment(o, events, deferred_sizes, st, tool_names=None):
     a = o.get('attachment') or {}
     t = a.get('type')
     if t == 'prompt_snapshot':
@@ -2246,7 +2281,10 @@ def _claude_attachment(o, events, deferred_sizes, st):
     elif t in ('file', 'edited_text_file', 'compact_file_reference', 'directory'):
         events.append(('B', (USER, 'Attached files'), rchars, 0, B_EST))
     elif t == 'queued_command':
-        events.append(('B', (USER, 'Typed prompts'), rchars, 0, B_EST))
+        prompt = a.get('prompt') if isinstance(a.get('prompt'), str) else _text_only(a.get('prompt'))
+        notif = NOTIF_RE.search(prompt or '') if a.get('commandMode') == 'task-notification' else None
+        path = P_PEER if is_peer(a.get('origin')) else notif_path(notif.group(0), tool_names) if notif else (USER, 'Typed prompts')
+        events.append(('B', path, rchars, 0, B_EST))
     else:
         events.append(('B', (USER, 'System reminders'), rchars, 0, B_EST))
 
@@ -2431,7 +2469,7 @@ def _codex_developer(text, env=None):
         out.append(((INSTR, 'Codex permissions'), n))
         rest = PERM_RE.sub('', rest)
     if any(mk in rest for mk, _ in T3_MARKERS) or 'T3 Code orchestration' in rest:
-        out.extend((p if p[1] == 'T3 Code' else (INSTR, 'Developer messages'), k) for p, k in split_t3(rest, 'Developer messages'))
+        out.extend((p if p[1] == 'T3 Code' else P_DEV, k) for p, k in split_t3(rest, P_DEV[1]))
     else:
         # Only the anchored wrapper is file content; Codex's own instructions merely mention AGENTS.md.
         doc = AGENTS_DOC_RE.match(rest)
@@ -2439,7 +2477,7 @@ def _codex_developer(text, env=None):
             out.extend(_codex_agents_md(doc.group(0), env))
             rest = rest[doc.end():]
         if rest.strip():
-            out.append(((INSTR, 'Developer messages'), len(rest)))
+            out.append((P_DEV, len(rest)))
     return out
 
 
