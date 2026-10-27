@@ -115,13 +115,13 @@ The explicit-read leaves carry `xf` (the file label) in the JSON, and file nodes
 
 | Child | Rule |
 |---|---|
-| **Task briefs** | A `<task-brief>` block placed directly after a `<t3-subagent-profile>` span in the same user or developer message. Also the typed prompt of a Claude native subagent (sidechain), unless it is a `[Request interrupted by user` marker. |
+| **Task briefs** | A `<task-brief>` block placed directly after a `<t3-subagent-profile>` span at the start of the remaining user or developer text, after known wrapper sections are removed. Prose, quote or code-fence prefixes prevent this classification. Also the typed prompt of a Claude native subagent (sidechain), unless it is a `[Request interrupted by user` marker. |
 | **Completion notifications** | A Claude `<task-notification>` whose `<tool-use-id>` belongs to a built-in `Agent` or `Task` tool call. A notification for any other tool, an MCP tool named `Agent`, or an unknown id stays under **User messages → Task / subagent notifications**. |
 | **Peer messages** | A Claude user message or queued command whose `origin` has `kind: peer` and a `from` sender. |
 
-Some things never go here: the static role profile, which stays in instructions; a profile or brief quoted in assistant output; and text that merely mentions agents or developers. Codex `agent_message` events also stay out. In the logs these are the session's own assistant mirrored back from `/root` to `/root`, so they stay under **Task / subagent notifications**. The **Developer-role instructions** node, formerly **Developer messages**, holds Codex `developer`-role text: harness, memory, collaboration and skill instructions, not inter-agent content.
+Some things never go here: the static role profile, which stays in instructions; a profile or brief quoted in assistant output; and text that merely mentions agents or developers. Codex `agent_message` events remain under **Task / subagent notifications**. Their event type alone does not establish received-message provenance; this collector does not distinguish received messages from assistant mirrors in that schema. The **Developer-role instructions** node, formerly **Developer messages**, holds Codex `developer`-role text: harness, memory, collaboration and skill instructions, not inter-agent content.
 
-Limits: provenance comes from the wrapper shape alone. A user who pastes a role profile followed by a brief is counted as a task brief. A T3 follow-up message to an existing child carries no wrapper, so it stays a **Typed prompt**. A brief separated from its profile by other text, or one that is not closed, also stays with the sender's text.
+Limits: provenance comes from the anchored wrapper shape alone. An exact unquoted delivery envelope pasted at the start of a message is indistinguishable from a delivered task brief. A T3 follow-up message to an existing child carries no wrapper, so it stays a **Typed prompt**. A brief separated from its profile by other text, or one that is not closed, also stays with the sender's text.
 
 ### Shell commands
 

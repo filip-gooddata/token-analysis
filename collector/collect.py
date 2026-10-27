@@ -2006,7 +2006,7 @@ def split_text(text, kind, tool_names=None):
         span = PROFILE_SPAN_RE.match(rest, m.start())
         n = len(span.group(0)) if span else len(rest)
         out.append(((INSTR, 'Subagent role profile', role_label(m.group(1))), n))
-        brief = BRIEF_RE.match(rest, span.end()) if span else None
+        brief = BRIEF_RE.match(rest, span.end()) if span and not rest[:m.start()].strip() else None
         if brief:
             out.append((P_BRIEF, len(brief.group(0))))
         rest = rest[:span.start()] + rest[(brief or span).end():] if span else ''

@@ -2691,6 +2691,18 @@ class AgentMessages(unittest.TestCase):
         got = [(e[1], e[2]) for e in sess['events'] if e[0] == 'B' and e[1][0] in (c.AGENTMSG, c.USER)]
         self.assertEqual(got, [(c.P_BRIEF, len('\n' + self.BRIEF))])
 
+    def test_quoted_profile_and_brief_stay_with_sender_text(self):
+        envelope = ROLE_TAG % 'drone' + '\n' + self.BRIEF
+        for text in ('Documentation example: “' + envelope + '”',
+                     '"' + envelope + '"', '“' + envelope + '”',
+                     '`' + envelope + '`', '```xml\n' + envelope + '\n```',
+                     '> ' + envelope, 'Example:\n' + envelope):
+            for kind in ('Typed prompts', c.P_DEV):
+                with self.subTest(text=text, kind=kind):
+                    parts = c.split_text(text, kind)
+                    self.assertNotIn(c.P_BRIEF, dict(parts))
+                    self.assertEqual(sum(n for _, n in parts), len(text))
+
     def test_codex_developer_and_agent_items_stay_put(self):
         def run(item):
             events, pending = [], []
