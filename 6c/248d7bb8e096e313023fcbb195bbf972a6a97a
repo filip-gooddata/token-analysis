@@ -1,0 +1,19 @@
+collector/template.html
+  s_457b6e48cdf039::t_a2decd4b759738 686
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6c248d7bb8e096e313023fcbb195bbf972a6a97a",
+  "prompts": {},
+  "sessions": {
+    "s_457b6e48cdf039": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fec8ae06-d966-4e54-8216-509f5be60e21",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Filip Kalný <filip.kalny@gooddata.com>"
+    }
+  }
+}
